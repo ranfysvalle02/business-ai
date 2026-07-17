@@ -1,0 +1,141 @@
+{# Contact section — store contact details, optional map, optional lead form.
+   Reads: store, section.settings.{heading, show_form, show_map} #}
+{% set _s = section.settings or {} %}
+{% set _heading = _s.heading or 'Visit Us' %}
+{% set _show_form = _s.show_form if _s.show_form is not none else true %}
+{% set _show_map = _s.show_map if _s.show_map is not none else true %}
+<section id="{{ section.anchor or 'contact' }}" class="bg-store-bg py-12 sm:py-20 px-4 sm:px-6">
+  <div class="container mx-auto">
+    <h2 class="reveal text-store-text text-2xl sm:text-4xl md:text-5xl font-extrabold text-center mb-8 sm:mb-12">{{ _heading }}</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-10 max-w-6xl mx-auto">
+      <div class="reveal bg-store-surface border border-store-text/10 rounded-store p-5 sm:p-8 shadow-lg">
+        <div class="space-y-4 sm:space-y-6 text-base sm:text-lg text-store-text">
+          {% if store.address %}
+          <div class="flex items-start gap-4">
+            <i class="fas fa-map-marker-alt text-store-primary text-2xl w-8 text-center mt-1"></i>
+            <span>{{ store.address }}</span>
+          </div>
+          {% endif %}
+          {% if store.hours %}
+          <div class="flex items-start gap-4">
+            <i class="fas fa-clock text-store-primary text-2xl w-8 text-center mt-1"></i>
+            <span>{{ store.hours | replace('\n', '<br>') | safe }}</span>
+          </div>
+          {% endif %}
+          {% if store.phone %}
+          <div class="flex items-center gap-4">
+            <i class="fas fa-phone text-store-primary text-2xl w-8 text-center"></i>
+            <a href="tel:{{ store.phone }}" class="hover:underline text-store-primary font-semibold">{{ store.phone_display or store.phone }}</a>
+          </div>
+          {% endif %}
+          {% if store.email %}
+          <div class="flex items-center gap-4">
+            <i class="fas fa-envelope text-store-primary text-2xl w-8 text-center"></i>
+            <a href="mailto:{{ store.email }}" class="hover:underline text-store-primary font-semibold">{{ store.email }}</a>
+          </div>
+          {% endif %}
+        </div>
+        {% if store.socials %}
+        <div class="mt-8 pt-6 border-t border-store-text/10 flex justify-center space-x-6">
+          {% for social in store.socials %}
+          <a href="{{ social.url }}" target="_blank" rel="noopener noreferrer"
+             class="text-store-text transition hover:text-store-primary text-3xl hover:scale-110"
+             aria-label="{{ social.icon }}">
+            <i class="fab fa-{{ social.icon }}"></i>
+          </a>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if _show_form %}
+        <form id="home-contact-form" class="mt-8 pt-6 border-t border-store-text/10 space-y-4">
+          <h3 class="text-store-text text-lg font-bold">Send us a message</h3>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <input type="text" name="customer_name" required autocomplete="name" placeholder="Your name"
+                   class="bg-store-bg text-store-text border border-store-text/20 rounded-store placeholder:text-store-text/40 focus:outline-none focus:ring-2 focus:ring-store-primary/40 focus:border-store-primary w-full px-3 py-2">
+            <input type="text" name="customer_contact" required autocomplete="email" placeholder="Phone or email"
+                   class="bg-store-bg text-store-text border border-store-text/20 rounded-store placeholder:text-store-text/40 focus:outline-none focus:ring-2 focus:ring-store-primary/40 focus:border-store-primary w-full px-3 py-2">
+          </div>
+          <textarea name="message" rows="3" placeholder="How can we help?"
+                    class="bg-store-bg text-store-text border border-store-text/20 rounded-store placeholder:text-store-text/40 focus:outline-none focus:ring-2 focus:ring-store-primary/40 focus:border-store-primary w-full px-3 py-2"></textarea>
+          {# Honeypot — hidden from humans; bots that fill it are dropped server-side. #}
+          <div aria-hidden="true" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden">
+            <label>Company website<input type="text" name="company_website" tabindex="-1" autocomplete="off"></label>
+          </div>
+          <button type="submit" id="home-contact-submit"
+                  class="store-btn btn-glow bg-store-primary text-store-onprimary rounded-store transition hover:brightness-110 active:translate-y-px inline-flex items-center justify-center gap-2 w-full font-bold py-3 px-4">
+            <i class="fas fa-paper-plane"></i>
+            <span data-label>Send message</span>
+          </button>
+        </form>
+        {% endif %}
+      </div>
+      {% if _show_map and store.google_maps_embed_html %}
+      <div class="reveal bg-store-surface border border-store-text/10 rounded-store shadow-lg overflow-hidden min-h-[320px]" data-reveal-delay="1">
+        {{ store.google_maps_embed_html | safe }}
+      </div>
+      {% elif _show_form %}
+      <div class="reveal bg-store-surface border border-store-text/10 rounded-store shadow-lg overflow-hidden min-h-[320px] flex items-center justify-center text-store-muted" data-reveal-delay="1">
+        <div class="text-center px-6">
+          <i class="fas fa-map-location-dot text-5xl mb-3 opacity-40"></i>
+          <p class="text-sm">Add a Google Maps embed in the admin dashboard to show your location here.</p>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if _show_form %}
+  <div id="store-toast" class="store-toast" role="status" aria-live="polite"></div>
+  <script>
+    (function () {
+      var form = document.getElementById('home-contact-form');
+      if (!form) return;
+      var toast = document.getElementById('store-toast');
+      var btn = document.getElementById('home-contact-submit');
+      var label = btn.querySelector('[data-label]');
+      function showToast(msg, ok) {
+        toast.textContent = msg;
+        toast.classList.toggle('is-ok', !!ok);
+        toast.classList.toggle('is-err', !ok);
+        toast.classList.add('is-show');
+        setTimeout(function () { toast.classList.remove('is-show'); }, 4200);
+      }
+      form.addEventListener('submit', async function (ev) {
+        ev.preventDefault();
+        btn.setAttribute('aria-busy', 'true');
+        label.textContent = 'Sending…';
+        try {
+          var res = await fetch((window.BASE_PATH || '') + '/api/submit-inquiry', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+              item_id: 'general',
+              item_name: 'General inquiry',
+              customer_name: form.customer_name.value.trim(),
+              customer_contact: form.customer_contact.value.trim(),
+              message: form.message.value.trim(),
+              company_website: (form.company_website && form.company_website.value) || ''
+            })
+          });
+          if (!res.ok) {
+            var body = await res.json().catch(function () { return {}; });
+            var d = body.detail;
+            throw new Error(typeof d === 'string' ? d : 'Something went wrong');
+          }
+          if (typeof gtag === 'function') gtag('event', 'generate_lead', { form: 'home_contact' });
+          if (typeof fbq === 'function') fbq('track', 'Lead');
+          showToast('Thanks! We will be in touch soon.', true);
+          form.reset();
+        } catch (err) {
+          showToast(String((err && err.message) || err), false);
+        } finally {
+          btn.removeAttribute('aria-busy');
+          label.textContent = 'Send message';
+        }
+      });
+    })();
+  </script>
+  {% endif %}
+</section>

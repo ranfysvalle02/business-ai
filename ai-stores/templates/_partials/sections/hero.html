@@ -1,0 +1,112 @@
+{# Hero section — full-bleed slideshow (falls back to a gradient hero).
+   Reads: slideshow, store, section.settings.{show_cta}
+   Boots via /static/js/slideshow.js (loaded by store_home.html). #}
+{% set _s = section.settings or {} %}
+{% set _show_cta = _s.show_cta if _s.show_cta is not none else true %}
+{% set _cta_label = store.cta_label or 'Contact' %}
+{% set _cta_raw   = store.cta_href or '/contact' %}
+{% set _cta_href  = (base_path ~ _cta_raw) if _cta_raw.startswith('/') else _cta_raw %}
+<section id="{{ section.anchor or 'hero' }}">
+{% if slideshow and slideshow|length > 0 %}
+  <div class="store-slideshow h-[85vh] sm:h-[92vh] w-full" data-slideshow data-hero aria-roledescription="carousel" aria-label="Featured">
+    <div class="store-slide-live" aria-live="polite" aria-atomic="true"></div>
+
+    {% for slide in slideshow %}
+    {% set _transition = slide.transition or 'kenburns' %}
+    {% set _duration   = slide.duration_ms or 6000 %}
+    {% set _fx = slide.focal_x if slide.focal_x is not none else 0.5 %}
+    {% set _fy = slide.focal_y if slide.focal_y is not none else 0.5 %}
+    {% set _next = slideshow[loop.index] if loop.index < slideshow|length else None %}
+    {% set _media_type = slide.media_type or 'image' %}
+    {% set _is_video = (_media_type == 'video') and slide.video_url %}
+    <div class="store-slide{% if loop.index == 1 %} is-active{% endif %}"
+         data-index="{{ loop.index0 }}"
+         data-transition="{{ _transition }}"
+         data-duration="{{ _duration }}"
+         data-media-type="{{ 'video' if _is_video else 'image' }}"
+         {% if _next %}data-preload="{{ _next.image_url }}"{% endif %}
+         role="group"
+         aria-roledescription="slide"
+         aria-label="Slide {{ loop.index }} of {{ slideshow|length }}">
+      <div class="store-slide-img"
+           style="{% if not _is_video %}background-image: url('{{ slide.image_url }}'); {% endif %}--fx: {{ _fx }}; --fy: {{ _fy }};"
+           role="img"
+           aria-label="{{ slide.caption or store.name }}">
+        {% if _is_video %}
+        <video src="{{ slide.video_url }}" poster="{{ slide.image_url }}" muted playsinline preload="metadata" aria-hidden="true"></video>
+        {% endif %}
+      </div>
+      <div class="store-slide-overlay" aria-hidden="true"></div>
+      <div class="store-slide-caption container mx-auto">
+        <h1 class="store-slide-caption-title text-2xl sm:text-4xl md:text-6xl lg:text-7xl font-extrabold text-white drop-shadow-2xl max-w-4xl">
+          {{ slide.caption or store.name or 'Welcome' }}
+        </h1>
+        {% if not slide.caption %}
+        <p class="store-slide-caption-subtitle text-sm sm:text-lg md:text-xl lg:text-2xl mt-3 sm:mt-5 text-white/90 drop-shadow-lg max-w-2xl">
+          {{ store.tagline or store.about_text or 'Welcome to our store' }}
+        </p>
+        {% endif %}
+        <div class="store-slide-caption-cta mt-5 sm:mt-8 flex flex-col sm:flex-row gap-3">
+          <a href="#catalog" data-magnetic="0.25"
+             class="btn-glow bg-store-primary text-store-onprimary rounded-store transition hover:brightness-110 active:translate-y-px inline-flex items-center justify-center gap-2 px-4 sm:px-6 py-2.5 sm:py-3 font-bold shadow-lg text-sm sm:text-base">
+            <i class="fas fa-th-large"></i>
+            Browse Catalog
+          </a>
+          {% if _show_cta %}
+          <a href="{{ _cta_href }}"
+             class="inline-flex items-center justify-center gap-2 px-4 sm:px-6 py-2.5 sm:py-3 rounded-md font-bold text-white bg-white/10 hover:bg-white/20 backdrop-blur-sm transition-colors border border-white/30 text-sm sm:text-base">
+            <i class="fas fa-paper-plane"></i>
+            {{ _cta_label }}
+          </a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+
+    {% if slideshow|length > 1 %}
+      <button type="button" data-slide-prev class="store-slide-ctrl absolute left-4 top-1/2 -translate-y-1/2 z-20" aria-label="Previous slide">
+        <i class="fas fa-chevron-left"></i>
+      </button>
+      <button type="button" data-slide-next class="store-slide-ctrl absolute right-4 top-1/2 -translate-y-1/2 z-20" aria-label="Next slide">
+        <i class="fas fa-chevron-right"></i>
+      </button>
+      <div class="store-slide-dots" role="tablist" aria-label="Slide navigation">
+        {% for slide in slideshow %}
+        <button type="button" role="tab" class="store-slide-dot{% if loop.index == 1 %} is-active{% endif %}" data-index="{{ loop.index0 }}" aria-label="Go to slide {{ loop.index }}"></button>
+        {% endfor %}
+      </div>
+      <button type="button" data-slide-toggle class="store-slide-ctrl absolute bottom-4 right-4 z-20" aria-label="Pause slideshow">
+        <i class="fas fa-pause"></i>
+      </button>
+    {% endif %}
+
+    <div class="store-slide-progress" aria-hidden="true"></div>
+  </div>
+{% else %}
+  <div class="h-[70vh] sm:h-[80vh] flex items-center justify-center relative overflow-hidden text-store-text"
+       style="background: linear-gradient(135deg, rgb(var(--store-theme-background)) 0%, rgb(var(--store-theme-surface)) 60%, rgb(var(--store-theme-background)) 100%);">
+    <div class="fx-aurora" aria-hidden="true"></div>
+    <div class="fx-orb" aria-hidden="true" style="width:120px;height:120px;top:18%;left:12%;animation-delay:-2s;"></div>
+    <div class="fx-orb" aria-hidden="true" style="width:70px;height:70px;top:62%;left:22%;animation-delay:-5s;"></div>
+    <div class="fx-orb" aria-hidden="true" style="width:150px;height:150px;top:26%;right:14%;animation-delay:-8s;"></div>
+    <div class="fx-orb" aria-hidden="true" style="width:56px;height:56px;bottom:16%;right:24%;animation-delay:-3s;"></div>
+    <div class="relative z-10 text-center px-4 max-w-4xl">
+      <h1 class="store-fade-up text-3xl sm:text-5xl md:text-7xl font-extrabold drop-shadow-lg text-gradient">{{ store.name or 'Welcome' }}</h1>
+      <p class="store-fade-up-delay text-sm sm:text-lg md:text-xl mt-4 opacity-90 text-store-muted">{{ store.tagline or store.about_text or 'Welcome to our store' }}</p>
+      <div class="store-fade-up-delay mt-6 sm:mt-10 flex flex-col sm:flex-row flex-wrap gap-3 justify-center">
+        <a href="#catalog" data-magnetic="0.25" class="btn-glow bg-store-primary text-store-onprimary rounded-store transition hover:brightness-110 active:translate-y-px inline-flex items-center justify-center gap-2 px-4 sm:px-6 py-2.5 sm:py-3 font-bold shadow-lg text-sm sm:text-base">
+          <i class="fas fa-th-large"></i>
+          Browse Catalog
+        </a>
+        {% if _show_cta %}
+        <a href="{{ _cta_href }}" class="bg-store-text/10 text-store-text border border-store-text/30 rounded-store transition hover:bg-store-text/20 inline-flex items-center justify-center gap-2 px-4 sm:px-6 py-2.5 sm:py-3 font-bold text-sm sm:text-base">
+          <i class="fas fa-paper-plane"></i>
+          {{ _cta_label }}
+        </a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+{% endif %}
+</section>

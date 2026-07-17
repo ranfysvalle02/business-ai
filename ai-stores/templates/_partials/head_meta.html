@@ -1,0 +1,82 @@
+{# =====================================================================
+   Shared <head> metadata partial.
+   Consumers may pre-set:
+     seo_title         (string)   — page title, defaults to "{{ store.name }}"
+     seo_description   (string)   — 160-char friendly description
+     seo_keywords      (string)   — comma-separated keywords (optional)
+     seo_og_image      (string)   — absolute or root-relative image URL
+     seo_og_type       (string)   — "website" or "product" (default website)
+     canonical_url     (string)   — full canonical URL
+     robots            (string)   — e.g. "index,follow" (default) or "noindex,nofollow"
+   All keys have safe fallbacks.
+   ===================================================================== #}
+{% set _site_name      = store.name or 'AI Stores' %}
+{% set _page_title     = seo_title or (store.name ~ (' — ' ~ store.tagline if store.tagline else '')) or 'AI Stores' %}
+{% set _page_desc_raw  = seo_description or store.about_text or store.tagline or 'A modern, installable storefront.' %}
+{% set _page_desc      = (_page_desc_raw or '') | truncate(200, True, '…') %}
+{% set _page_keywords  = seo_keywords or store.seo_keywords or (store.name ~ ', ' ~ (store.business_type or 'store')) if store.name else 'store, shop, catalog' %}
+{% set _og_type        = seo_og_type or 'website' %}
+{% set _og_image_path  = seo_og_image or (slideshow[0].image_url if slideshow and slideshow|length > 0 else None) or store.hero_image_url or store.logo_url or '/static/icons/icon-512x512.png' %}
+{% set _base_url       = (request.base_url | string).rstrip('/') if request is defined and request else '' %}
+{# Origin = scheme://host with NO store prefix. request.url.path already carries the
+   /{store} prefix, so canonical/og:url must use the origin (not base_url) to avoid /x/x. #}
+{% set _origin         = (request.url.scheme ~ '://' ~ request.url.netloc) if request is defined and request else '' %}
+{% set _og_image_abs   = _og_image_path if _og_image_path.startswith('http') else (_origin ~ _og_image_path) %}
+{% set _canonical      = canonical_url or ((_origin ~ (request.url.path if request is defined and request else '/')) if _origin else '') %}
+{% set _robots         = robots or 'index,follow' %}
+
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="format-detection" content="telephone=no">
+<meta name="robots" content="{{ _robots }}">
+
+<title>{{ _page_title }}</title>
+<meta name="description" content="{{ _page_desc }}">
+<meta name="keywords" content="{{ _page_keywords }}">
+
+{% if _canonical %}<link rel="canonical" href="{{ _canonical }}">{% endif %}
+
+{# ------- Open Graph ------- #}
+<meta property="og:type"         content="{{ _og_type }}">
+<meta property="og:site_name"    content="{{ _site_name }}">
+<meta property="og:title"        content="{{ _page_title }}">
+<meta property="og:description"  content="{{ _page_desc }}">
+<meta property="og:image"        content="{{ _og_image_abs }}">
+{% if _canonical %}<meta property="og:url" content="{{ _canonical }}">{% endif %}
+{% if store.lang %}<meta property="og:locale" content="{{ store.lang }}">{% endif %}
+
+{# ------- Twitter ------- #}
+<meta name="twitter:card"        content="summary_large_image">
+<meta name="twitter:title"       content="{{ _page_title }}">
+<meta name="twitter:description" content="{{ _page_desc }}">
+<meta name="twitter:image"       content="{{ _og_image_abs }}">
+
+{# ------- PWA ------- #}
+<meta name="theme-color" content="{{ store.theme_primary or '#5e61f1' }}">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="{{ _site_name }}">
+<link rel="manifest" href="/static/site.webmanifest">
+<link rel="icon" type="image/png" sizes="16x16" href="/static/icons/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192x192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/static/icons/icon-512x512.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
+
+{# ------- Performance hints ------- #}
+<link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin>
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+<link rel="preconnect" href="https://res.cloudinary.com" crossorigin>
+<link rel="preconnect" href="https://images.unsplash.com" crossorigin>
+<link rel="dns-prefetch" href="https://images.pexels.com">
+
+{# ------- Critical first-slide preload ------- #}
+{% if slideshow and slideshow|length > 0 %}
+<link rel="preload" as="image" fetchpriority="high" href="{{ slideshow[0].image_url }}">
+{% elif store.hero_image_url %}
+<link rel="preload" as="image" fetchpriority="high" href="{{ store.hero_image_url }}">
+{% endif %}
+
+{# ------- Global stylesheet (single source of truth) ------- #}
+<link rel="stylesheet" href="/static/css/app.css">

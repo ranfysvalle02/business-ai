@@ -1,0 +1,26 @@
+{# Call-to-action banner.
+   Reads: section.settings.{heading, subtext, button_label, button_href, bg_image}
+   Falls back to the store-level CTA when button fields are unset. #}
+{% set _s = section.settings or {} %}
+{% set _heading = _s.heading or 'Ready when you are' %}
+{% set _btn_label = _s.button_label or store.cta_label or 'Get in touch' %}
+{% set _btn_raw   = _s.button_href or store.cta_href or '/contact' %}
+{% set _btn_href  = (base_path ~ _btn_raw) if _btn_raw.startswith('/') else _btn_raw %}
+{% set _on_image = true if _s.bg_image else false %}
+<section id="{{ section.anchor or 'cta' }}" class="bg-store-surface relative py-16 sm:py-24 px-4 sm:px-6 overflow-hidden border-t border-store-text/10"
+         style="{% if _s.bg_image %}background-image: linear-gradient(rgba(0,0,0,.65), rgba(0,0,0,.65)), url('{{ _s.bg_image }}'); background-size: cover; background-position: center;{% endif %}">
+  {% if not _s.bg_image %}<div class="fx-aurora" aria-hidden="true"></div>{% endif %}
+  <div class="container mx-auto max-w-3xl text-center relative z-10">
+    <h2 class="reveal text-2xl sm:text-4xl md:text-5xl font-extrabold {{ 'text-white' if _on_image else 'text-store-text' }}">{{ _heading }}</h2>
+    {% if _s.subtext %}
+    <p class="reveal text-base sm:text-xl mt-4 {{ 'text-gray-200' if _on_image else 'text-store-muted' }}" data-reveal-delay="1">{{ _s.subtext }}</p>
+    {% endif %}
+    <div class="reveal mt-8" data-reveal-delay="2">
+      <a href="{{ _btn_href }}" data-magnetic="0.3"
+         class="btn-glow bg-store-primary text-store-onprimary rounded-store transition hover:brightness-110 active:translate-y-px inline-flex items-center justify-center gap-2 px-6 sm:px-8 py-3 sm:py-4 font-bold shadow-lg text-base sm:text-lg">
+        <i class="fas fa-paper-plane"></i>
+        {{ _btn_label }}
+      </a>
+    </div>
+  </div>
+</section>

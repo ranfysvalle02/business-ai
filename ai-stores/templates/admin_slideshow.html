@@ -1,0 +1,966 @@
+{% extends "_base.html" %}
+
+{%- set store = (store[0] if store is sequence and not store is mapping and store else store) or {} -%}
+{% set seo_title = 'Manage Slideshow — ' ~ (store.name or 'AI Stores') %}
+{% set robots    = 'noindex,nofollow' %}
+{% set nav_mode  = 'admin' %}
+
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.3/Sortable.min.js" defer></script>
+<script defer src="/static/js/slideshow.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 sm:px-6 py-6 sm:py-10">
+
+  <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4 reveal">
+    <div>
+      <h1 class="text-2xl sm:text-4xl font-bold">Slideshow</h1>
+      <p class="text-sm text-gray-400 mt-1">
+        Drag to reorder · Click a thumb to set the focal point · Changes autosave.
+        <span class="store-kbd-hint ml-2"><kbd>P</kbd> preview all</span>
+        <span class="store-kbd-hint ml-2"><kbd>⌘A</kbd> select all</span>
+        <span class="store-kbd-hint ml-2"><kbd>Del</kbd> delete</span>
+      </p>
+    </div>
+    <div class="flex flex-col sm:flex-row items-stretch gap-2 sm:gap-3 w-full sm:w-auto">
+      <a href="{{ base_path }}/admin/dashboard" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded-lg transition-colors text-center">
+        <i class="fas fa-arrow-left mr-2"></i>Dashboard
+      </a>
+      <a href="{{ base_path }}/" target="_blank" rel="noopener" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors text-center">
+        <i class="fas fa-eye mr-2"></i>View Live
+      </a>
+    </div>
+  </div>
+
+  <!-- ========= Sticky toolbar ========= -->
+  <div id="toolbar" class="store-admin-toolbar reveal">
+    <button type="button" id="btn-preview-all"
+            class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-lg transition-colors"
+            title="Preview the whole slideshow (P)">
+      <i class="fas fa-play mr-1"></i>Preview all
+    </button>
+    <button type="button" id="btn-select-all"
+            class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm font-semibold rounded-lg transition-colors"
+            title="Select all slides (⌘A)">
+      <i class="fas fa-check-double mr-1"></i>Select all
+    </button>
+    <span class="text-sm text-gray-400" data-selection-count>0 selected</span>
+    <span class="group-sep"></span>
+    <button type="button" id="btn-bulk-delete" disabled
+            class="px-3 py-1.5 bg-red-700/40 hover:bg-red-600 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
+      <i class="fas fa-trash mr-1"></i>Delete selected
+    </button>
+    <button type="button" id="btn-clear-sel" disabled
+            class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
+      Deselect
+    </button>
+    <span class="text-sm text-gray-400 ml-auto" data-slide-count>{{ slideshow|length }} total</span>
+  </div>
+
+  <!-- ========= Upload zone ========= -->
+  <section class="reveal bg-gray-800 border border-gray-700 rounded-xl p-5 sm:p-6 mb-6">
+    <div class="flex items-center justify-between mb-4 gap-3 flex-wrap">
+      <h2 class="text-xl font-bold"><i class="fas fa-cloud-upload-alt mr-2"></i>Add slides</h2>
+      <div class="store-tabs" role="tablist" aria-label="Upload type">
+        <button type="button" class="store-tab is-active" data-upload-type="image" role="tab" aria-selected="true">
+          <i class="fas fa-image mr-1"></i>Image
+        </button>
+        <button type="button" class="store-tab" data-upload-type="video" role="tab" aria-selected="false">
+          <i class="fas fa-video mr-1"></i>Video
+        </button>
+      </div>
+    </div>
+
+    <div id="dropzone"
+         class="border-2 border-dashed border-gray-600 rounded-lg p-6 sm:p-8 text-center hover:border-blue-500 transition-colors cursor-pointer"
+         tabindex="0" role="button" aria-label="Upload media">
+      <input type="file" id="bulk-file-input" accept="image/*" multiple class="hidden">
+      <i class="fas fa-images text-4xl text-gray-400 mb-3" data-dz-icon></i>
+      <p class="text-gray-300 font-semibold" data-dz-title>Drop images here or click to browse</p>
+      <p class="text-xs text-gray-500 mt-1" data-dz-help>Multi-file supported · PNG / JPG / WebP / GIF · up to 10MB each</p>
+    </div>
+
+    <div id="upload-queue" class="store-upload-queue mt-4"></div>
+
+    <div class="mt-4 border-t border-gray-700 pt-4">
+      <details class="text-sm">
+        <summary class="cursor-pointer text-gray-400 hover:text-gray-300 select-none">
+          <i class="fas fa-link mr-1"></i>Or add a slide from a URL
+        </summary>
+        <form id="url-form" class="mt-3 grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2">
+          <input type="url" id="url-input" required placeholder="https://example.com/image.jpg or video.mp4"
+                 class="w-full px-3 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <button type="submit" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors">Add</button>
+        </form>
+      </details>
+    </div>
+  </section>
+
+  <!-- ========= Slides grid ========= -->
+  <section class="reveal bg-gray-800 border border-gray-700 rounded-xl p-5 sm:p-6">
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-xl font-bold"><i class="fas fa-th-large mr-2"></i>Slides</h2>
+    </div>
+
+    {% if slideshow %}
+    <div id="slides-grid" class="store-thumb-grid">
+      {% for slide in slideshow %}
+      {% set _mtype = slide.media_type or 'image' %}
+      {% set _fx = (slide.focal_x if slide.focal_x is not none else 0.5) %}
+      {% set _fy = (slide.focal_y if slide.focal_y is not none else 0.5) %}
+      <article class="store-thumb"
+               data-slide-id="{{ slide._id }}"
+               data-image-url="{{ slide.image_url }}"
+               data-video-url="{{ slide.video_url or '' }}"
+               data-media-type="{{ _mtype }}">
+        <div class="store-thumb-aspect" data-focal-target>
+          {% if _mtype == 'video' and slide.video_url %}
+          <video src="{{ slide.video_url }}"
+                 poster="{{ slide.image_url }}"
+                 muted playsinline preload="metadata"
+                 style="object-position: {{ _fx * 100 }}% {{ _fy * 100 }}%;"></video>
+          {% else %}
+          <img src="{{ slide.image_url }}" alt="{{ slide.caption or 'Slide ' ~ loop.index }}"
+               style="object-position: {{ _fx * 100 }}% {{ _fy * 100 }}%;">
+          {% endif %}
+          <span class="store-thumb-handle" title="Drag to reorder"><i class="fas fa-grip-lines"></i></span>
+          <span class="store-thumb-index" data-position>{{ loop.index }}</span>
+          <span class="store-thumb-select" data-select role="checkbox" aria-checked="false" tabindex="0" title="Select slide">
+            <i class="fas fa-check text-[10px]"></i>
+          </span>
+          <span class="store-thumb-media-badge{% if _mtype == 'video' %} is-video{% endif %}">
+            {% if _mtype == 'video' %}<i class="fas fa-play"></i> Video{% else %}<i class="fas fa-image"></i> Image{% endif %}
+          </span>
+          <span class="store-thumb-focal" data-focal-marker
+                style="left: {{ _fx * 100 }}%; top: {{ _fy * 100 }}%;"></span>
+        </div>
+
+        <div class="p-3 space-y-2">
+          <input type="text" name="caption" placeholder="Caption (optional)"
+                 value="{{ slide.caption or '' }}"
+                 class="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 text-white text-sm rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                 data-field="caption">
+
+          <div class="grid grid-cols-[1fr_auto] gap-2 items-center">
+            <select name="transition"
+                    class="px-2 py-1.5 bg-gray-900 border border-gray-700 text-white text-sm rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    data-field="transition">
+              {% set current_tx = slide.transition or 'kenburns' %}
+              <option value="kenburns"{% if current_tx == 'kenburns' %} selected{% endif %}>Ken Burns</option>
+              <option value="fade"{% if current_tx == 'fade' %} selected{% endif %}>Fade</option>
+              <option value="zoom"{% if current_tx == 'zoom' %} selected{% endif %}>Zoom</option>
+              <option value="slide"{% if current_tx == 'slide' %} selected{% endif %}>Slide</option>
+            </select>
+            <button type="button" class="store-apply-all" data-apply-all="transition" title="Apply this transition to every slide">All</button>
+          </div>
+
+          <div class="grid grid-cols-[1fr_auto] gap-2 items-center">
+            <div class="flex items-center gap-1 text-xs text-gray-300">
+              <input type="range" name="duration_ms" min="2000" max="15000" step="500"
+                     value="{{ slide.duration_ms or 6000 }}"
+                     class="flex-1" data-field="duration_ms">
+              <span data-duration-label>{{ ((slide.duration_ms or 6000) / 1000) | int }}s</span>
+            </div>
+            <button type="button" class="store-apply-all" data-apply-all="duration_ms" title="Apply this duration to every slide">All</button>
+          </div>
+
+          <div class="flex items-center justify-between text-xs text-gray-400 pt-1">
+            <span><i class="fas fa-crosshairs mr-1"></i>Focal:
+              <span data-focal-label>{{ (_fx * 100) | round | int }}%, {{ (_fy * 100) | round | int }}%</span>
+            </span>
+            <span data-save-status class="opacity-0 transition-opacity"><i class="fas fa-check text-green-400"></i> Saved</span>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2 pt-2 border-t border-gray-700">
+            <button type="button" class="px-2 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded transition-colors" data-action="preview" title="Preview from this slide">
+              <i class="fas fa-play mr-1"></i>Preview
+            </button>
+            <button type="button" class="px-2 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs font-semibold rounded transition-colors" data-action="duplicate" title="Duplicate slide">
+              <i class="fas fa-clone mr-1"></i>Copy
+            </button>
+            <button type="button" class="px-2 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded transition-colors" data-action="delete" title="Delete slide">
+              <i class="fas fa-trash mr-1"></i>Delete
+            </button>
+          </div>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-center py-10 text-gray-400">
+      <i class="fas fa-image text-5xl text-gray-600 mb-3"></i>
+      <p>No slides yet. Upload images or videos above to get started.</p>
+    </div>
+    {% endif %}
+  </section>
+</div>
+
+<!-- Full preview lightbox (plays the entire slideshow) -->
+<div id="preview-modal" class="store-preview-modal" role="dialog" aria-modal="true" aria-hidden="true">
+  <div class="store-preview-frame">
+    <button type="button" class="store-preview-close" data-preview-close aria-label="Close preview"><i class="fas fa-times"></i></button>
+    <div id="preview-slideshow" class="store-slideshow h-full w-full"></div>
+  </div>
+  <div class="store-preview-meta">
+    <span><kbd>←</kbd>/<kbd>→</kbd> change · <kbd>Space</kbd> play/pause · <kbd>Esc</kbd> close</span>
+  </div>
+</div>
+
+<!-- Undo bar (after delete) -->
+<div id="undo-bar" class="store-undo-bar" role="status" aria-live="polite">
+  <span data-undo-text>1 slide deleted.</span>
+  <button type="button" id="btn-undo">Undo</button>
+</div>
+
+<!-- Toast -->
+<div id="store-toast" class="store-toast" role="status" aria-live="polite"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  'use strict';
+
+  const API = (window.BASE_PATH || '') + '/api/slideshow';
+
+  // ─── DOM refs ─────────────────────────────────────────────────────────
+  const grid          = document.getElementById('slides-grid');
+  const slideCountEl  = document.querySelector('[data-slide-count]');
+  const selCountEl    = document.querySelector('[data-selection-count]');
+  const dropzone      = document.getElementById('dropzone');
+  const fileInput     = document.getElementById('bulk-file-input');
+  const uploadQueueEl = document.getElementById('upload-queue');
+  const urlForm       = document.getElementById('url-form');
+  const urlInput      = document.getElementById('url-input');
+
+  const previewModal  = document.getElementById('preview-modal');
+  const previewStage  = document.getElementById('preview-slideshow');
+
+  const toolbar       = document.getElementById('toolbar');
+  const btnPreviewAll = document.getElementById('btn-preview-all');
+  const btnSelectAll  = document.getElementById('btn-select-all');
+  const btnClearSel   = document.getElementById('btn-clear-sel');
+  const btnBulkDelete = document.getElementById('btn-bulk-delete');
+
+  const undoBar       = document.getElementById('undo-bar');
+  const btnUndo       = document.getElementById('btn-undo');
+  const undoText      = undoBar.querySelector('[data-undo-text]');
+
+  const toastEl       = document.getElementById('store-toast');
+
+  let uploadType = 'image';
+  let previewCtl = null;
+  let undoQueue  = null;
+  let undoTimer  = null;
+
+  // ─── helpers ──────────────────────────────────────────────────────────
+  function toast(msg, kind) {
+    if (!toastEl) return;
+    toastEl.textContent = msg;
+    toastEl.classList.remove('is-ok', 'is-err');
+    if (kind === 'ok')  toastEl.classList.add('is-ok');
+    if (kind === 'err') toastEl.classList.add('is-err');
+    toastEl.classList.add('is-show');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => toastEl.classList.remove('is-show'), 2500);
+  }
+
+  function apiJson(url, opts) {
+    opts = opts || {};
+    return fetch(url, {
+      credentials: 'same-origin',
+      ...opts,
+      headers: {
+        'Accept': 'application/json',
+        ...(opts.headers || {}),
+        ...(opts.body && !(opts.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {})
+      }
+    }).then(async (res) => {
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || ('HTTP ' + res.status));
+      }
+      return res.json();
+    });
+  }
+
+  function debounce(fn, ms) {
+    let t;
+    return function () {
+      const args = arguments;
+      clearTimeout(t);
+      t = setTimeout(() => fn.apply(this, args), ms);
+    };
+  }
+
+  function cards() {
+    return grid ? Array.from(grid.querySelectorAll('.store-thumb')) : [];
+  }
+
+  function refreshIndices() {
+    cards().forEach((card, idx) => {
+      const pos = card.querySelector('[data-position]');
+      if (pos) pos.textContent = idx + 1;
+    });
+    if (slideCountEl) slideCountEl.textContent = cards().length + ' total';
+    refreshSelectionUI();
+  }
+
+  function flashSaved(card) {
+    const el = card.querySelector('[data-save-status]');
+    if (!el) return;
+    el.style.opacity = '1';
+    clearTimeout(el._t);
+    el._t = setTimeout(() => { el.style.opacity = '0'; }, 1200);
+  }
+
+  async function patchSlide(card, patch) {
+    const id = card.dataset.slideId;
+    if (!id) return;
+    try {
+      await apiJson(API + '/' + id, { method: 'PATCH', body: JSON.stringify(patch) });
+      flashSaved(card);
+    } catch (err) {
+      toast('Save failed: ' + err.message, 'err');
+    }
+  }
+
+  function snapshotFromDom(card) {
+    const captionEl = card.querySelector('[data-field="caption"]');
+    const transitionEl = card.querySelector('[data-field="transition"]');
+    const durationEl = card.querySelector('[data-field="duration_ms"]');
+    const focalMarker = card.querySelector('[data-focal-marker]');
+    const pos = card.querySelector('[data-position]');
+    return {
+      image_url:   card.dataset.imageUrl,
+      video_url:   card.dataset.videoUrl || null,
+      media_type:  card.dataset.mediaType || 'image',
+      caption:     captionEl ? captionEl.value : '',
+      order:       pos ? parseInt(pos.textContent, 10) : 1,
+      transition:  transitionEl ? transitionEl.value : 'kenburns',
+      duration_ms: durationEl ? parseInt(durationEl.value, 10) : 6000,
+      focal_x:     focalMarker ? (parseFloat(focalMarker.style.left) || 50) / 100 : 0.5,
+      focal_y:     focalMarker ? (parseFloat(focalMarker.style.top)  || 50) / 100 : 0.5,
+    };
+  }
+
+  // ─── selection ────────────────────────────────────────────────────────
+  function selected() { return cards().filter((c) => c.classList.contains('is-selected')); }
+
+  function refreshSelectionUI() {
+    const count = selected().length;
+    if (selCountEl) selCountEl.textContent = count + ' selected';
+    btnBulkDelete.disabled = count === 0;
+    btnClearSel.disabled   = count === 0;
+    toolbar.classList.toggle('is-active', count > 0);
+    cards().forEach((c) => {
+      const cb = c.querySelector('[data-select]');
+      if (cb) cb.setAttribute('aria-checked', c.classList.contains('is-selected') ? 'true' : 'false');
+    });
+  }
+
+  function toggleSelect(card, force) {
+    if (force === true)      card.classList.add('is-selected');
+    else if (force === false) card.classList.remove('is-selected');
+    else                      card.classList.toggle('is-selected');
+    refreshSelectionUI();
+  }
+
+  // ─── per-card binding ─────────────────────────────────────────────────
+  function initCard(card) {
+    const captionEl    = card.querySelector('[data-field="caption"]');
+    const transitionEl = card.querySelector('[data-field="transition"]');
+    const durationEl   = card.querySelector('[data-field="duration_ms"]');
+    const durationLabel= card.querySelector('[data-duration-label]');
+    const focalArea    = card.querySelector('[data-focal-target]');
+    const focalMarker  = card.querySelector('[data-focal-marker]');
+    const focalLabel   = card.querySelector('[data-focal-label]');
+    const mediaEl      = focalArea ? focalArea.querySelector('img, video') : null;
+
+    if (captionEl) {
+      const save = debounce(() => patchSlide(card, { caption: captionEl.value }), 600);
+      captionEl.addEventListener('input', save);
+      captionEl.addEventListener('blur', () => patchSlide(card, { caption: captionEl.value }));
+    }
+    if (transitionEl) {
+      transitionEl.addEventListener('change', () => patchSlide(card, { transition: transitionEl.value }));
+    }
+    if (durationEl && durationLabel) {
+      durationEl.addEventListener('input', () => {
+        durationLabel.textContent = Math.round(parseInt(durationEl.value, 10) / 1000) + 's';
+      });
+      durationEl.addEventListener('change', () => patchSlide(card, { duration_ms: parseInt(durationEl.value, 10) }));
+    }
+
+    if (focalArea && focalMarker && focalLabel) {
+      focalArea.addEventListener('click', (ev) => {
+        if (ev.target.closest('[data-select]') || ev.target.closest('.store-thumb-handle')) return;
+        const rect = focalArea.getBoundingClientRect();
+        const fx = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+        const fy = Math.max(0, Math.min(1, (ev.clientY - rect.top)  / rect.height));
+        focalMarker.style.left = (fx * 100) + '%';
+        focalMarker.style.top  = (fy * 100) + '%';
+        if (mediaEl) mediaEl.style.objectPosition = (fx * 100) + '% ' + (fy * 100) + '%';
+        focalLabel.textContent = Math.round(fx * 100) + '%, ' + Math.round(fy * 100) + '%';
+        patchSlide(card, { focal_x: Number(fx.toFixed(3)), focal_y: Number(fy.toFixed(3)) });
+      });
+    }
+
+    const selBox = card.querySelector('[data-select]');
+    if (selBox) {
+      selBox.addEventListener('click', (e) => { e.stopPropagation(); toggleSelect(card); });
+      selBox.addEventListener('keydown', (e) => {
+        if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); toggleSelect(card); }
+      });
+    }
+
+    card.querySelectorAll('[data-apply-all]').forEach((btn) => {
+      btn.addEventListener('click', () => applyToAll(card, btn.dataset.applyAll));
+    });
+
+    const previewBtn = card.querySelector('[data-action="preview"]');
+    if (previewBtn) previewBtn.addEventListener('click', () => openPreview(cards().indexOf(card)));
+
+    const dupBtn = card.querySelector('[data-action="duplicate"]');
+    if (dupBtn) dupBtn.addEventListener('click', () => duplicateSlide(card));
+
+    const delBtn = card.querySelector('[data-action="delete"]');
+    if (delBtn) delBtn.addEventListener('click', () => deleteSlides([card], { skipConfirm: false }));
+
+    const vid = card.querySelector('video');
+    if (vid) {
+      card.addEventListener('mouseenter', () => { try { vid.muted = true; vid.play().catch(() => {}); } catch (_) {} });
+      card.addEventListener('mouseleave', () => { try { vid.pause(); vid.currentTime = 0; } catch (_) {} });
+    }
+  }
+
+  async function applyToAll(srcCard, field) {
+    const srcEl = srcCard.querySelector('[data-field="' + field + '"]');
+    if (!srcEl) return;
+    const val = field === 'duration_ms' ? parseInt(srcEl.value, 10) : srcEl.value;
+    const others = cards().filter((c) => c !== srcCard);
+    if (!others.length) { toast('No other slides to update', 'err'); return; }
+    const label = field === 'duration_ms' ? 'duration' : 'transition';
+    if (!confirm('Apply this ' + label + ' to all ' + others.length + ' other slide' + (others.length === 1 ? '' : 's') + '?')) return;
+    try {
+      await Promise.all(others.map((card) => {
+        const t = card.querySelector('[data-field="' + field + '"]');
+        if (t) t.value = val;
+        if (field === 'duration_ms') {
+          const lbl = card.querySelector('[data-duration-label]');
+          if (lbl) lbl.textContent = Math.round(val / 1000) + 's';
+        }
+        const patch = {};
+        patch[field] = field === 'duration_ms' ? parseInt(val, 10) : val;
+        return apiJson(API + '/' + card.dataset.slideId, { method: 'PATCH', body: JSON.stringify(patch) });
+      }));
+      toast('Applied to ' + others.length + ' slide' + (others.length === 1 ? '' : 's'), 'ok');
+    } catch (err) {
+      toast('Failed: ' + err.message, 'err');
+    }
+  }
+
+  // ─── delete + undo ────────────────────────────────────────────────────
+  async function deleteSlides(targets, opts) {
+    opts = opts || {};
+    if (!targets.length) return;
+    if (!opts.skipConfirm) {
+      const ok = confirm('Delete ' + targets.length + ' slide' + (targets.length === 1 ? '' : 's') + '?');
+      if (!ok) return;
+    }
+    const snapshots = targets.map((card) => ({ card, data: snapshotFromDom(card) }));
+    try {
+      await Promise.all(snapshots.map(({ card }) =>
+        apiJson(API + '/' + card.dataset.slideId, { method: 'DELETE' })
+      ));
+      snapshots.forEach(({ card }) => card.remove());
+      refreshIndices();
+      undoQueue = snapshots;
+      showUndoBar(snapshots.length);
+    } catch (err) {
+      toast('Delete failed: ' + err.message, 'err');
+    }
+  }
+
+  function showUndoBar(n) {
+    undoText.textContent = n + ' slide' + (n === 1 ? '' : 's') + ' deleted.';
+    undoBar.classList.add('is-show');
+    clearTimeout(undoTimer);
+    undoTimer = setTimeout(() => { undoBar.classList.remove('is-show'); undoQueue = null; }, 7000);
+  }
+
+  async function performUndo() {
+    if (!undoQueue) return;
+    const q = undoQueue;
+    undoQueue = null;
+    undoBar.classList.remove('is-show');
+    try {
+      await Promise.all(q.map(({ data }) =>
+        apiJson(API, { method: 'POST', body: JSON.stringify(data) })
+      ));
+      toast('Restored ' + q.length + ' slide' + (q.length === 1 ? '' : 's'), 'ok');
+      setTimeout(() => window.location.reload(), 500);
+    } catch (err) {
+      toast('Restore failed: ' + err.message, 'err');
+    }
+  }
+
+  // ─── duplicate ────────────────────────────────────────────────────────
+  async function duplicateSlide(card) {
+    const all = cards();
+    const idx = all.indexOf(card);
+    const payload = snapshotFromDom(card);
+    payload.order = idx + 2;
+    try {
+      await apiJson(API, { method: 'POST', body: JSON.stringify(payload) });
+      const after = all.slice(idx + 1);
+      await Promise.all(after.map((c, i) =>
+        apiJson(API + '/' + c.dataset.slideId, { method: 'PATCH', body: JSON.stringify({ order: idx + 3 + i }) })
+      ));
+      toast('Duplicated', 'ok');
+      setTimeout(() => window.location.reload(), 400);
+    } catch (err) {
+      toast('Duplicate failed: ' + err.message, 'err');
+    }
+  }
+
+  // ─── sortable (drag-to-reorder) ───────────────────────────────────────
+  function initSortable() {
+    if (!grid || typeof Sortable === 'undefined') return;
+    Sortable.create(grid, {
+      handle: '.store-thumb-handle',
+      animation: 180,
+      ghostClass: 'is-ghost',
+      dragClass: 'is-dragging',
+      onEnd: async () => {
+        refreshIndices();
+        try {
+          await Promise.all(cards().map((card, idx) =>
+            apiJson(API + '/' + card.dataset.slideId, {
+              method: 'PATCH',
+              body: JSON.stringify({ order: idx + 1 })
+            })
+          ));
+        } catch (err) {
+          toast('Reorder failed: ' + err.message, 'err');
+        }
+      }
+    });
+  }
+
+  // ─── upload (image OR video) ──────────────────────────────────────────
+  function setUploadType(t) {
+    uploadType = t;
+    document.querySelectorAll('[data-upload-type]').forEach((b) => {
+      const active = b.dataset.uploadType === t;
+      b.classList.toggle('is-active', active);
+      b.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    const isVid = t === 'video';
+    fileInput.accept = isVid ? 'video/*' : 'image/*';
+    fileInput.multiple = !isVid;
+    const ic = document.querySelector('[data-dz-icon]');
+    if (ic) ic.className = (isVid ? 'fas fa-video' : 'fas fa-images') + ' text-4xl text-gray-400 mb-3';
+    const tt = document.querySelector('[data-dz-title]');
+    if (tt) tt.textContent = isVid ? 'Drop a video here or click to browse' : 'Drop images here or click to browse';
+    const hh = document.querySelector('[data-dz-help]');
+    if (hh) hh.textContent = isVid
+      ? 'MP4 / MOV / WebM · up to 75MB · auto-compressed to 1080p H.264, audio stripped'
+      : 'Multi-file supported · PNG / JPG / WebP / GIF · up to 10MB each';
+  }
+
+  function buildQueueRow(file) {
+    const row = document.createElement('div');
+    row.className = 'store-upload-row';
+    row.innerHTML =
+      '<div class="store-upload-thumb" data-thumb></div>' +
+      '<div>' +
+        '<div class="flex items-center justify-between gap-2">' +
+          '<span class="truncate font-medium text-gray-200"></span>' +
+          '<span class="text-xs text-gray-400" data-status>Queued</span>' +
+        '</div>' +
+        '<div class="store-upload-bar"><span></span></div>' +
+      '</div>' +
+      '<div class="text-xs text-gray-400" data-size></div>';
+    row.querySelector('span.truncate').textContent = file.name;
+    row.querySelector('[data-size]').textContent = (file.size / 1024 / 1024).toFixed(1) + ' MB';
+    const thumb = row.querySelector('[data-thumb]');
+    if (file.type.startsWith('image/')) {
+      const img = document.createElement('img');
+      img.className = 'store-upload-thumb';
+      thumb.replaceWith(img);
+      const reader = new FileReader();
+      reader.onload = (e) => { img.src = e.target.result; };
+      reader.readAsDataURL(file);
+    } else {
+      thumb.style.display = 'inline-flex';
+      thumb.style.alignItems = 'center';
+      thumb.style.justifyContent = 'center';
+      thumb.innerHTML = '<i class="fas fa-video text-gray-400"></i>';
+    }
+    uploadQueueEl.appendChild(row);
+    return row;
+  }
+
+  function rowProgress(row, status, pct) {
+    const statusEl = row.querySelector('[data-status]');
+    const bar = row.querySelector('.store-upload-bar > span');
+    if (statusEl) statusEl.textContent = status;
+    if (bar && typeof pct === 'number') bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  }
+
+  function uploadWithProgress(endpoint, file, folder, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', endpoint);
+      xhr.withCredentials = true;
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable && onProgress) onProgress((ev.loaded / ev.total) * 100);
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText)); }
+          catch (e) { reject(new Error('Invalid server response')); }
+        } else {
+          let msg = 'HTTP ' + xhr.status;
+          try { msg = JSON.parse(xhr.responseText).detail || msg; } catch (_) {}
+          reject(new Error(msg));
+        }
+      };
+      xhr.onerror = () => reject(new Error('Network error'));
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('folder', folder);
+      xhr.send(fd);
+    });
+  }
+
+  async function handleFiles(fileList) {
+    const isVideo = uploadType === 'video';
+    const maxBytes = isVideo ? 75 * 1024 * 1024 : 10 * 1024 * 1024;
+    const maxLabel = isVideo ? '75' : '10';
+    const prefix = isVideo ? 'video/' : 'image/';
+    const files = Array.from(fileList).filter((f) => {
+      if (!f.type.startsWith(prefix)) {
+        toast(f.name + ' is not a ' + (isVideo ? 'video' : 'image'), 'err');
+        return false;
+      }
+      if (f.size > maxBytes) {
+        toast(f.name + ' is ' + (f.size / 1024 / 1024).toFixed(1) + 'MB — limit is ' + maxLabel + 'MB', 'err');
+        return false;
+      }
+      return true;
+    });
+    if (!files.length) return;
+
+    const endpoint = (window.BASE_PATH || '') + (isVideo ? '/admin/upload-video' : '/admin/upload-image');
+    const folder   = isVideo ? 'slideshow_videos' : 'slideshow';
+    const existing = cards().length;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const row = buildQueueRow(file);
+      rowProgress(row, 'Uploading…', 0);
+      try {
+        const result = await uploadWithProgress(endpoint, file, folder, (pct) =>
+          rowProgress(row, 'Uploading… ' + Math.round(pct) + '%', pct));
+        if (!result || !result.ok) throw new Error((result && result.detail) || 'Upload failed');
+        rowProgress(row, isVideo ? 'Transcoding…' : 'Creating slide…', 100);
+
+        const duration_ms = isVideo
+          ? Math.max(4000, Math.min(15000, Math.round((result.duration || 6) * 1000)))
+          : 6000;
+
+        // Rough estimate of post-compression size using our 2.5 Mbps ceiling
+        // (audio is stripped, so we don't budget for it). Surfacing this in
+        // the queue row gives the admin a concrete sense of the savings.
+        const estCompressedMB = isVideo && result.duration
+          ? Math.max(1, Math.round(result.duration * 2500 / 8 / 1024))
+          : null;
+
+        const payload = isVideo ? {
+          image_url:   result.thumbnail_url || result.video_url,
+          video_url:   result.video_url,
+          media_type:  'video',
+          caption:     '',
+          order:       existing + i + 1,
+          transition:  'fade',
+          duration_ms: duration_ms,
+          focal_x:     0.5,
+          focal_y:     0.5,
+        } : {
+          image_url:   result.image_url,
+          media_type:  'image',
+          caption:     '',
+          order:       existing + i + 1,
+          transition:  'kenburns',
+          duration_ms: 6000,
+          focal_x:     0.5,
+          focal_y:     0.5,
+        };
+        await apiJson(API, { method: 'POST', body: JSON.stringify(payload) });
+        const doneLabel = estCompressedMB
+          ? 'Done · ~' + estCompressedMB + 'MB compressed'
+          : 'Done';
+        rowProgress(row, doneLabel, 100);
+        row.querySelector('[data-status]').classList.add('text-green-400');
+        setTimeout(() => { row.remove(); }, 1800);
+      } catch (err) {
+        rowProgress(row, 'Failed: ' + err.message, 0);
+        row.querySelector('[data-status]').classList.add('text-red-400');
+      }
+    }
+    setTimeout(() => window.location.reload(), 600);
+  }
+
+  // ─── preview modal (full slideshow) ───────────────────────────────────
+  function buildPreviewSlide(card, index, total, allCards) {
+    const url   = card.dataset.imageUrl;
+    const vurl  = card.dataset.videoUrl;
+    const mtype = card.dataset.mediaType || 'image';
+    const captionEl    = card.querySelector('[data-field="caption"]');
+    const transitionEl = card.querySelector('[data-field="transition"]');
+    const durationEl   = card.querySelector('[data-field="duration_ms"]');
+    const focalMarker  = card.querySelector('[data-focal-marker]');
+    const fx = focalMarker ? (parseFloat(focalMarker.style.left) || 50) / 100 : 0.5;
+    const fy = focalMarker ? (parseFloat(focalMarker.style.top)  || 50) / 100 : 0.5;
+    const dur = parseInt(durationEl ? durationEl.value : 6000, 10) || 6000;
+    const next = allCards[index + 1];
+
+    const isVideo = mtype === 'video' && !!vurl;
+
+    const slide = document.createElement('div');
+    slide.className = 'store-slide' + (index === 0 ? ' is-active' : '');
+    slide.dataset.index = index;
+    slide.dataset.transition = transitionEl ? transitionEl.value : 'kenburns';
+    slide.dataset.duration = dur;
+    slide.dataset.mediaType = isVideo ? 'video' : 'image';
+    if (next) slide.dataset.preload = next.dataset.imageUrl;
+    slide.setAttribute('role', 'group');
+    slide.setAttribute('aria-roledescription', 'slide');
+    slide.setAttribute('aria-label', 'Slide ' + (index + 1) + ' of ' + total);
+
+    const imgLayer = document.createElement('div');
+    imgLayer.className = 'store-slide-img';
+    imgLayer.style.setProperty('--fx', String(fx));
+    imgLayer.style.setProperty('--fy', String(fy));
+    imgLayer.style.setProperty('--kb-dur', Math.max(dur * 1.3, 6000) + 'ms');
+    if (!isVideo) {
+      imgLayer.style.backgroundImage = "url('" + url + "')";
+    } else {
+      const v = document.createElement('video');
+      v.src = vurl;
+      v.poster = url;
+      v.muted = true;
+      v.playsInline = true;
+      v.preload = 'auto';
+      imgLayer.appendChild(v);
+    }
+    slide.appendChild(imgLayer);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'store-slide-overlay';
+    overlay.setAttribute('aria-hidden', 'true');
+    slide.appendChild(overlay);
+
+    const cap = document.createElement('div');
+    cap.className = 'store-slide-caption container mx-auto';
+    const h = document.createElement('h3');
+    h.className = 'store-slide-caption-title text-3xl md:text-5xl font-extrabold text-white drop-shadow-2xl';
+    h.textContent = (captionEl && captionEl.value) || '';
+    cap.appendChild(h);
+    slide.appendChild(cap);
+
+    return slide;
+  }
+
+  function openPreview(startAt) {
+    const all = cards();
+    if (!all.length) { toast('No slides to preview', 'err'); return; }
+
+    if (previewCtl && previewCtl.destroy) previewCtl.destroy();
+    previewStage.innerHTML = '';
+
+    const live = document.createElement('div');
+    live.className = 'store-slide-live';
+    live.setAttribute('aria-live', 'polite');
+    live.setAttribute('aria-atomic', 'true');
+    previewStage.appendChild(live);
+
+    all.forEach((card, idx) =>
+      previewStage.appendChild(buildPreviewSlide(card, idx, all.length, all)));
+
+    if (all.length > 1) {
+      const prev = document.createElement('button');
+      prev.type = 'button';
+      prev.dataset.slidePrev = '';
+      prev.className = 'store-slide-ctrl absolute left-4 top-1/2 -translate-y-1/2 z-20';
+      prev.setAttribute('aria-label', 'Previous slide');
+      prev.innerHTML = '<i class="fas fa-chevron-left"></i>';
+      previewStage.appendChild(prev);
+
+      const nxt = document.createElement('button');
+      nxt.type = 'button';
+      nxt.dataset.slideNext = '';
+      nxt.className = 'store-slide-ctrl absolute right-4 top-1/2 -translate-y-1/2 z-20';
+      nxt.setAttribute('aria-label', 'Next slide');
+      nxt.innerHTML = '<i class="fas fa-chevron-right"></i>';
+      previewStage.appendChild(nxt);
+
+      const dots = document.createElement('div');
+      dots.className = 'store-slide-dots';
+      dots.setAttribute('role', 'tablist');
+      dots.setAttribute('aria-label', 'Slide navigation');
+      all.forEach((_, idx) => {
+        const d = document.createElement('button');
+        d.type = 'button';
+        d.className = 'store-slide-dot' + (idx === 0 ? ' is-active' : '');
+        d.dataset.index = idx;
+        d.setAttribute('aria-label', 'Go to slide ' + (idx + 1));
+        dots.appendChild(d);
+      });
+      previewStage.appendChild(dots);
+
+      const toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.dataset.slideToggle = '';
+      toggle.className = 'store-slide-ctrl absolute bottom-4 right-4 z-20';
+      toggle.setAttribute('aria-label', 'Pause slideshow');
+      toggle.innerHTML = '<i class="fas fa-pause"></i>';
+      previewStage.appendChild(toggle);
+    }
+
+    const progress = document.createElement('div');
+    progress.className = 'store-slide-progress';
+    progress.setAttribute('aria-hidden', 'true');
+    previewStage.appendChild(progress);
+
+    previewModal.classList.add('is-open');
+    previewModal.setAttribute('aria-hidden', 'false');
+
+    if (window.StoreSlideshow && typeof window.StoreSlideshow.init === 'function') {
+      previewCtl = window.StoreSlideshow.init(previewStage, { keyboard: false, gestures: true, autoplay: true });
+      if (previewCtl && Number.isFinite(startAt) && startAt > 0) previewCtl.setActive(startAt);
+    } else {
+      toast('Preview engine not loaded yet — try again in a moment', 'err');
+    }
+  }
+
+  function closePreview() {
+    if (previewCtl && previewCtl.destroy) previewCtl.destroy();
+    previewCtl = null;
+    previewStage.innerHTML = '';
+    previewModal.classList.remove('is-open');
+    previewModal.setAttribute('aria-hidden', 'true');
+  }
+
+  previewModal.addEventListener('click', (ev) => { if (ev.target === previewModal) closePreview(); });
+  previewModal.querySelector('[data-preview-close]').addEventListener('click', closePreview);
+
+  // ─── toolbar buttons ──────────────────────────────────────────────────
+  btnPreviewAll.addEventListener('click', () => openPreview(0));
+  btnSelectAll.addEventListener('click',  () => cards().forEach((c) => toggleSelect(c, true)));
+  btnClearSel.addEventListener('click',   () => cards().forEach((c) => toggleSelect(c, false)));
+  btnBulkDelete.addEventListener('click', () => deleteSlides(selected()));
+  btnUndo.addEventListener('click',       performUndo);
+
+  // ─── tabs / dropzone / url form ───────────────────────────────────────
+  document.querySelectorAll('[data-upload-type]').forEach((b) => {
+    b.addEventListener('click', () => setUploadType(b.dataset.uploadType));
+  });
+
+  dropzone.addEventListener('click', () => fileInput.click());
+  dropzone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); }
+  });
+  fileInput.addEventListener('change', () => handleFiles(fileInput.files));
+
+  ['dragenter', 'dragover'].forEach((ev) => dropzone.addEventListener(ev, (e) => {
+    e.preventDefault(); e.stopPropagation();
+    dropzone.classList.add('is-ghost');
+  }));
+  ['dragleave', 'drop'].forEach((ev) => dropzone.addEventListener(ev, (e) => {
+    e.preventDefault(); e.stopPropagation();
+    dropzone.classList.remove('is-ghost');
+  }));
+  dropzone.addEventListener('drop', (e) => {
+    if (!(e.dataTransfer && e.dataTransfer.files)) return;
+    const first = e.dataTransfer.files[0];
+    if (first) {
+      if (first.type.startsWith('video/') && uploadType !== 'video') setUploadType('video');
+      else if (first.type.startsWith('image/') && uploadType !== 'image') setUploadType('image');
+    }
+    handleFiles(e.dataTransfer.files);
+  });
+
+  urlForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const url = urlInput.value.trim();
+    if (!url) return;
+    const existing = cards().length;
+    const isVideo = uploadType === 'video';
+    const payload = isVideo
+      ? { image_url: url, video_url: url, media_type: 'video',
+          caption: '', order: existing + 1, transition: 'fade', duration_ms: 7000, focal_x: 0.5, focal_y: 0.5 }
+      : { image_url: url, media_type: 'image',
+          caption: '', order: existing + 1, transition: 'kenburns', duration_ms: 6000, focal_x: 0.5, focal_y: 0.5 };
+    try {
+      await apiJson(API, { method: 'POST', body: JSON.stringify(payload) });
+      urlInput.value = '';
+      window.location.reload();
+    } catch (err) {
+      toast('Failed: ' + err.message, 'err');
+    }
+  });
+
+  // ─── keyboard shortcuts ───────────────────────────────────────────────
+  document.addEventListener('keydown', (ev) => {
+    const tag = (document.activeElement && document.activeElement.tagName) || '';
+    const inField = ['INPUT', 'TEXTAREA', 'SELECT'].includes(tag);
+    const previewOpen = previewModal.classList.contains('is-open');
+
+    // Preview-modal controls take priority and ignore field-focus rules,
+    // since the modal sits over everything.
+    if (previewOpen && previewCtl) {
+      if (ev.key === 'Escape')     { closePreview(); return; }
+      if (ev.key === 'ArrowLeft')  { ev.preventDefault(); previewCtl.prev(); return; }
+      if (ev.key === 'ArrowRight') { ev.preventDefault(); previewCtl.next(); return; }
+      if (ev.key === ' ')          { ev.preventDefault(); previewCtl.togglePlaying(); return; }
+      return;
+    }
+
+    if (ev.key === 'Escape') {
+      if (selected().length) { btnClearSel.click(); return; }
+    }
+    if (inField) return;
+
+    if (ev.key === 'p' || ev.key === 'P') { ev.preventDefault(); openPreview(0); return; }
+    if ((ev.metaKey || ev.ctrlKey) && (ev.key === 'a' || ev.key === 'A')) {
+      ev.preventDefault();
+      cards().forEach((c) => toggleSelect(c, true));
+      return;
+    }
+    if ((ev.key === 'Delete' || ev.key === 'Backspace') && selected().length) {
+      ev.preventDefault();
+      deleteSlides(selected());
+      return;
+    }
+    if ((ev.metaKey || ev.ctrlKey) && (ev.key === 'z' || ev.key === 'Z') && undoQueue) {
+      ev.preventDefault();
+      performUndo();
+      return;
+    }
+  });
+
+  // ─── boot ─────────────────────────────────────────────────────────────
+  cards().forEach(initCard);
+  refreshSelectionUI();
+  const ensureSortable = () => {
+    if (typeof Sortable !== 'undefined') initSortable();
+    else setTimeout(ensureSortable, 50);
+  };
+  ensureSortable();
+})();
+</script>
+{% endblock %}

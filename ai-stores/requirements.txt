@@ -1,0 +1,10 @@
+# AI Stores — pinned for deterministic, reproducible builds.
+# Bump deliberately; the manifest + these pins are the source of truth.
+mdb-engine==0.15.1
+fastapi==0.136.0
+uvicorn[standard]==0.41.0
+python-multipart==0.0.32
+jinja2==3.1.6
+python-dotenv==1.2.1
+cloudinary==1.44.1
+httpx==0.28.1

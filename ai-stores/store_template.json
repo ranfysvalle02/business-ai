@@ -1,0 +1,186 @@
+{
+  "_comment": "Default content copied into every newly provisioned store scope. `name` and `slug_id` on the single store document are overwritten per store at provision time (see provision_store in main.py). Everything else is starter content the admin edits from the dashboard. Seeded idempotently via mdb_engine.core.seeding.seed_initial_data — one document set per store scope ({slug}_stores, {slug}_items, ...).",
+
+  "stores": [
+    {
+      "name": "New Store",
+      "slug_id": "new-store",
+      "business_type": "retail",
+      "tagline": "Everything you need, beautifully presented",
+      "about_text": "A fast, installable storefront you can shape without code. Reorder sections, manage your catalog, and publish specials — all from a simple admin console. This is placeholder copy: edit it from the admin dashboard to make the store your own.",
+      "address": "123 Market Street, Your City",
+      "phone": "15551234567",
+      "phone_display": "(555) 123-4567",
+      "email": "hello@example.com",
+      "notify_enabled": true,
+      "notify_email": "",
+      "hours": "Monday-Friday: 9am-6pm\nSaturday: 10am-4pm\nSunday: Closed",
+      "lang": "en",
+      "hero_image_url": "https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=1600&auto=format&fit=crop",
+      "logo_url": "/static/img/logo.png",
+      "google_maps_embed_html": "",
+      "inventory_description": "Browse our catalog. Every item is managed from the admin console — add your own products, set prices, and organize them into categories.",
+      "cta_label": "Contact",
+      "cta_href": "/contact",
+      "schema_type": "LocalBusiness",
+      "currency": "USD",
+      "price_range": "$$",
+      "seo_keywords": "store, shop, catalog, online store",
+      "google_tag_id": null,
+      "meta_pixel_id": null,
+      "socials": [
+        { "icon": "facebook",  "url": "https://facebook.com/"  },
+        { "icon": "instagram", "url": "https://instagram.com/" }
+      ],
+      "theme_primary":        "#5e61f1",
+      "theme_secondary":      "#22d3ee",
+      "theme_background":     "#0b1120",
+      "theme_surface":        "#151d2e",
+      "theme_text":           "#f8fafc",
+      "theme_text_secondary": "#94a3b8",
+      "theme_on_primary":     "#ffffff",
+      "theme_on_secondary":   "#0a0a0a",
+      "style_preset":         "midnight",
+      "font_heading":         "'Space Grotesk', system-ui, sans-serif",
+      "font_body":            "'Inter', system-ui, sans-serif",
+      "fonts_google":         "Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700",
+      "theme_radius":         "0.75rem",
+      "heading_transform":    "none",
+      "heading_spacing":      "-0.02em"
+    }
+  ],
+
+  "sections": [
+    {
+      "key": "hero",
+      "type": "hero",
+      "title": "Hero slideshow",
+      "order": 1,
+      "visible": true,
+      "nav_label": null,
+      "anchor": "hero",
+      "settings": { "show_cta": true }
+    },
+    {
+      "key": "catalog",
+      "type": "catalog",
+      "title": "Catalog grid",
+      "order": 2,
+      "visible": true,
+      "nav_label": "Catalog",
+      "anchor": "catalog",
+      "settings": { "heading": "Our Catalog", "subheading": "", "columns": 3 }
+    },
+    {
+      "key": "specials",
+      "type": "specials",
+      "title": "Specials & announcements",
+      "order": 3,
+      "visible": true,
+      "nav_label": "Specials",
+      "anchor": "specials",
+      "settings": { "heading": "Specials & Announcements" }
+    },
+    {
+      "key": "cta",
+      "type": "cta",
+      "title": "Call to action banner",
+      "order": 4,
+      "visible": true,
+      "nav_label": null,
+      "anchor": "cta",
+      "settings": {
+        "heading": "Ready when you are",
+        "subtext": "Have a question or a special request? We would love to hear from you.",
+        "button_label": "Get in touch",
+        "button_href": "/contact",
+        "bg_image": ""
+      }
+    },
+    {
+      "key": "contact",
+      "type": "contact",
+      "title": "Contact & map",
+      "order": 5,
+      "visible": true,
+      "nav_label": "Contact",
+      "anchor": "contact",
+      "settings": { "heading": "Visit Us", "show_form": true, "show_map": true }
+    }
+  ],
+
+  "items": [
+    {
+      "name": "Signature Item",
+      "item_code": "SKU001",
+      "category": "Featured",
+      "price": 49.0,
+      "description": "A flagship example item. Replace this with your own product or service — set the price, add a photo, and pick a category. Everything here is editable from the admin console.",
+      "image_url": "https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800&auto=format&fit=crop",
+      "status": "Available",
+      "attributes": { "Highlight": "Best seller", "Ships": "1-2 business days" }
+    },
+    {
+      "name": "Premium Package",
+      "item_code": "SKU002",
+      "category": "Featured",
+      "price": 129.0,
+      "description": "A higher-tier example bundle. Use categories to group items — the catalog section groups and lists everything automatically.",
+      "image_url": "https://images.unsplash.com/photo-1560343090-f0409e92791a?w=800&auto=format&fit=crop",
+      "status": "Available",
+      "attributes": { "Includes": "Everything in Signature", "Support": "Priority" }
+    },
+    {
+      "name": "Everyday Essential",
+      "item_code": "SKU003",
+      "category": "New Arrivals",
+      "price": 19.0,
+      "description": "An affordable staple. Mark items as Available, Limited, Pending, or Sold — the badge updates on the storefront automatically.",
+      "image_url": "https://images.unsplash.com/photo-1526170375885-4d8ecf77b99f?w=800&auto=format&fit=crop",
+      "status": "Available",
+      "attributes": { "Material": "Sample" }
+    },
+    {
+      "name": "Limited Edition",
+      "item_code": "SKU004",
+      "category": "New Arrivals",
+      "price": 89.0,
+      "description": "A limited-availability example. This one shows the Limited Availability status badge.",
+      "image_url": "https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800&auto=format&fit=crop",
+      "status": "Limited Availability",
+      "attributes": { "Quantity": "While supplies last" }
+    },
+    {
+      "name": "Consultation",
+      "item_code": "SKU005",
+      "category": "Services",
+      "description": "A service-style listing with no fixed price — shows a \"Free quote\" call to action instead. Great for services or made-to-order work.",
+      "image_url": "https://images.unsplash.com/photo-1521737711867-e3b97375f902?w=800&auto=format&fit=crop",
+      "status": "Available",
+      "attributes": { "Format": "Remote or in person", "Duration": "30 minutes" }
+    },
+    {
+      "name": "Gift Card",
+      "item_code": "SKU006",
+      "category": "Services",
+      "price": 25.0,
+      "description": "A flexible gift option. Duplicate, edit, or delete any of these sample items to build out your real catalog.",
+      "image_url": "https://images.unsplash.com/photo-1549465220-1a8b9238cd48?w=800&auto=format&fit=crop",
+      "status": "Available",
+      "attributes": { "Redeemable": "In store and online" }
+    }
+  ],
+
+  "specials": [
+    {
+      "title": "Welcome Offer",
+      "content": "Placeholder promotion — edit or remove this from the admin Specials page. Announce a sale, a new arrival, or store news here."
+    }
+  ],
+
+  "slideshow": [
+    { "image_url": "https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=1920&auto=format&fit=crop", "caption": "Welcome to your new store", "order": 1, "transition": "kenburns", "duration_ms": 7000, "focal_x": 0.5, "focal_y": 0.55 },
+    { "image_url": "https://images.unsplash.com/photo-1481437156560-3205f6a55735?w=1920&auto=format&fit=crop", "caption": "Curated just for you",       "order": 2, "transition": "zoom",     "duration_ms": 6500, "focal_x": 0.5, "focal_y": 0.5  },
+    { "image_url": "https://images.unsplash.com/photo-1472851294608-062f824d29cc?w=1920&auto=format&fit=crop", "caption": "Quality you can trust",      "order": 3, "transition": "slide",    "duration_ms": 7000, "focal_x": 0.5, "focal_y": 0.5  }
+  ]
+}

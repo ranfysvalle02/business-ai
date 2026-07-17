@@ -1,0 +1,238 @@
+{% extends "_base.html" %}
+
+{%- set store = (store[0] if store is sequence and not store is mapping and store else store) or {} -%}
+{% set seo_title = 'Manage Inquiries — ' ~ (store.name or 'AI Stores') %}
+{% set robots    = 'noindex,nofollow' %}
+{% set nav_mode  = 'admin' %}
+
+{% block head_extra %}
+<script src="/static/js/notifications.js"></script>
+<style>
+  .unread {
+    border-left: 4px solid #3b82f6;
+    background: linear-gradient(to right, rgba(59,130,246,.1), transparent);
+  }
+  .unread::before {
+    content: ''; position: absolute; top: 1rem; right: 1rem;
+    width: 12px; height: 12px; background: #3b82f6; border-radius: 50%;
+    animation: store-pulse 2s infinite;
+  }
+  @keyframes store-pulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
+  .avatar { width: 48px; height: 48px; border-radius: 50%; object-fit: cover; border: 2px solid rgba(255,255,255,.1); }
+  .store-count-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 1.5rem; height: 1.5rem; padding: 0 .5rem;
+    font-size: .75rem; font-weight: 700; color: white;
+    background: #ef4444; border-radius: 9999px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 sm:px-6 py-6 sm:py-10">
+  <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 sm:mb-8 gap-4 reveal">
+    <div class="flex items-center space-x-4">
+      <h1 class="text-2xl sm:text-4xl font-bold">Inquiries</h1>
+      <span id="unread-count-badge" class="store-count-badge hidden">0</span>
+    </div>
+    <a href="{{ base_path }}/admin/dashboard" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded-lg transition-colors">
+      <i class="fas fa-arrow-left mr-2"></i>Dashboard
+    </a>
+  </div>
+
+  {% set inquiry_unread_count = inquiries | selectattr('read', 'equalto', false) | list | length %}
+  {% if inquiry_unread_count > 0 %}
+  <div id="unread-banner" class="reveal bg-blue-900/20 border border-blue-700 rounded-lg p-4 mb-6 flex items-center justify-between">
+    <div class="flex items-center space-x-3">
+      <i class="fas fa-bell text-blue-400 text-xl"></i>
+      <span class="text-blue-200">
+        <strong>{{ inquiry_unread_count }}</strong> unread {{ 'inquiry' if inquiry_unread_count == 1 else 'inquiries' }}
+      </span>
+    </div>
+    <button onclick="markAllAsRead()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors">
+      <i class="fas fa-check-double mr-2"></i>Mark All as Read
+    </button>
+  </div>
+  {% endif %}
+
+  <div class="reveal bg-gray-800 border border-gray-700 rounded-xl p-6 sm:p-8 mb-6">
+    <div class="flex justify-between items-center mb-6">
+      <h2 class="text-2xl font-bold">All Inquiries</h2>
+      <span class="text-gray-400">{{ inquiries|length }} total</span>
+    </div>
+
+    {% if inquiries %}
+    <div class="space-y-4">
+      {% for inquiry in inquiries %}
+      <div class="store-card bg-gray-700 border border-gray-600 rounded-lg p-6 relative {% if not inquiry.read %}unread{% else %}read{% endif %}" data-inquiry-id="{{ inquiry._id }}">
+        <div class="flex items-start space-x-4">
+          <div class="flex-shrink-0">
+            <img src="" alt="{{ inquiry.customer_name }}" class="avatar inquiry-avatar"
+                 data-identifier="{{ inquiry.customer_contact or inquiry.customer_name }}"
+                 onerror="this.src=generateAvatarUrl(this.dataset.identifier || 'default')">
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex justify-between items-start mb-3">
+              <div class="flex-1">
+                <div class="flex flex-wrap items-center gap-2 mb-2">
+                  <span class="px-2 py-0.5 text-xs font-bold bg-teal-900 text-teal-200 rounded-full"><i class="fas fa-comment-dots mr-1"></i>Inquiry</span>
+                  {% if inquiry.service_category %}
+                  <span class="px-2 py-0.5 text-xs font-semibold bg-yellow-900/70 text-yellow-200 rounded-full"><i class="fas fa-folder-open mr-1"></i>{{ inquiry.service_category }}</span>
+                  {% endif %}
+                </div>
+                <h3 class="text-xl font-bold mb-1 text-white">{{ inquiry.item_name or 'General request' }}</h3>
+                {% if inquiry.issue %}
+                <p class="text-sm text-yellow-300 mb-2"><i class="fas fa-triangle-exclamation mr-1"></i>{{ inquiry.issue }}</p>
+                {% endif %}
+                <div class="flex flex-wrap items-center gap-4 text-sm text-gray-400">
+                  <span class="flex items-center"><i class="fas fa-user mr-2 text-blue-400"></i><span class="font-medium">{{ inquiry.customer_name }}</span></span>
+                  <span class="flex items-center"><i class="fas fa-envelope mr-2 text-green-400"></i><a href="mailto:{{ inquiry.customer_contact }}" class="hover:text-green-300">{{ inquiry.customer_contact }}</a></span>
+                  <span class="flex items-center"><i class="fas fa-calendar mr-2 text-purple-400"></i>{{ inquiry.date_submitted.strftime('%Y-%m-%d %H:%M') if inquiry.date_submitted.__class__.__name__ == 'datetime' else (inquiry.date_submitted[:16] if inquiry.date_submitted else 'N/A') }}</span>
+                </div>
+              </div>
+              <div class="flex items-center space-x-3 ml-4">
+                {% if not inquiry.read %}<span class="px-2 py-1 text-xs font-bold bg-blue-600 text-blue-100 rounded-full">NEW</span>{% endif %}
+                <span class="inq-status-badge px-3 py-1 rounded text-sm font-semibold {% if inquiry.status == 'New' %}bg-blue-900 text-blue-200{% elif inquiry.status == 'Contacted' %}bg-yellow-900 text-yellow-200{% elif inquiry.status == 'Won' %}bg-green-900 text-green-200{% elif inquiry.status == 'Lost' %}bg-red-900 text-red-200{% else %}bg-gray-600 text-gray-200{% endif %}">{{ inquiry.status or 'New' }}</span>
+                {% if not inquiry.read %}<button onclick="markAsRead('{{ inquiry._id }}')" class="px-3 py-1 text-xs bg-gray-600 hover:bg-gray-500 text-white rounded transition-colors" title="Mark as read"><i class="fas fa-check"></i></button>{% endif %}
+              </div>
+            </div>
+            {% if inquiry.preferred_date %}
+            <div class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              <div class="flex items-start gap-2 text-gray-300"><i class="fas fa-clock mt-1 text-yellow-400"></i><span><span class="text-gray-500">Preferred:</span> {{ inquiry.preferred_date }}</span></div>
+            </div>
+            {% endif %}
+            {% if inquiry.message %}
+            <div class="mt-4 p-4 bg-gray-800 rounded-lg border-l-4 border-blue-500">
+              <p class="text-gray-300 leading-relaxed whitespace-pre-wrap">{{ inquiry.message }}</p>
+            </div>
+            {% endif %}
+            <div class="mt-4 pt-4 border-t border-gray-600">
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label class="block text-xs text-gray-400 mb-1 font-semibold">Status</label>
+                  <select class="inq-status w-full px-3 py-2 bg-gray-800 border border-gray-600 text-white rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500">
+                    {% set _st = inquiry.status or 'New' %}
+                    {% for s in ['New', 'Contacted', 'Won', 'Lost'] %}
+                    <option value="{{ s }}" {% if _st == s %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="sm:col-span-2">
+                  <label class="block text-xs text-gray-400 mb-1 font-semibold"><i class="fas fa-sticky-note mr-1"></i>Internal notes</label>
+                  <textarea class="inq-notes w-full px-3 py-2 bg-gray-800 border border-gray-600 text-white rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500" rows="2" placeholder="Private — quote given, follow-up date, parts ordered…">{{ inquiry.notes or '' }}</textarea>
+                </div>
+              </div>
+              <div class="flex items-center gap-3 mt-3">
+                <button type="button" onclick="saveInquiry('{{ inquiry._id }}', this)"
+                        class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg text-sm transition-colors">
+                  <i class="fas fa-save mr-1"></i>Save changes
+                </button>
+                <span class="inq-save-status text-sm" role="status"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="text-center py-12">
+      <i class="fas fa-envelope text-6xl text-gray-600 mb-4"></i>
+      <p class="text-xl text-gray-400 mb-2">No inquiries yet</p>
+      <p class="text-gray-500">Customer inquiries will appear here.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function generateAvatarUrl(identifier) {
+    if (!identifier) return 'https://api.dicebear.com/8.x/rings/svg?seed=default';
+    return 'https://api.dicebear.com/8.x/rings/svg?seed=' + encodeURIComponent(identifier);
+  }
+
+  var STATUS_BADGE_CLASSES = {
+    New: 'bg-blue-900 text-blue-200',
+    Contacted: 'bg-yellow-900 text-yellow-200',
+    Won: 'bg-green-900 text-green-200',
+    Lost: 'bg-red-900 text-red-200'
+  };
+
+  async function saveInquiry(inquiryId, btn) {
+    var card = document.querySelector(`[data-inquiry-id="${inquiryId}"]`);
+    if (!card) return;
+    var status = card.querySelector('.inq-status').value;
+    var notes = card.querySelector('.inq-notes').value;
+    var statusEl = card.querySelector('.inq-save-status');
+    var original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>Saving…';
+    try {
+      var res = await fetch(`${window.BASE_PATH || ''}/api/inquiries/${inquiryId}`, {
+        method: 'PATCH',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ status: status, notes: notes })
+      });
+      if (!res.ok) {
+        var err = await res.json().catch(function () { return {}; });
+        throw new Error(err.detail || err.error || ('HTTP ' + res.status));
+      }
+      var badge = card.querySelector('.inq-status-badge');
+      if (badge) {
+        badge.textContent = status;
+        badge.className = 'inq-status-badge px-3 py-1 rounded text-sm font-semibold ' +
+          (STATUS_BADGE_CLASSES[status] || 'bg-gray-600 text-gray-200');
+      }
+      statusEl.textContent = 'Saved ✓';
+      statusEl.className = 'inq-save-status text-sm text-green-400';
+    } catch (err) {
+      statusEl.textContent = String((err && err.message) || err);
+      statusEl.className = 'inq-save-status text-sm text-red-400';
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = original;
+      setTimeout(function () { statusEl.textContent = ''; }, 3000);
+    }
+  }
+
+  async function markAsRead(inquiryId) {
+    if (!window.InquiryNotifications) { console.error('Notifications module not loaded'); return; }
+    const result = await window.InquiryNotifications.markInquiryRead(inquiryId);
+    if (result.success) {
+      const el = document.querySelector(`[data-inquiry-id="${inquiryId}"]`);
+      if (el) {
+        el.classList.remove('unread');
+        el.classList.add('read');
+        const btn = el.querySelector('button[onclick*="markAsRead"]');
+        if (btn) btn.remove();
+      }
+    } else {
+      alert('Error: ' + (result.error || 'Unknown error'));
+    }
+  }
+
+  async function markAllAsRead() {
+    if (!window.InquiryNotifications) return;
+    if (!confirm('Mark all inquiries as read?')) return;
+    const result = await window.InquiryNotifications.markAllInquiriesRead();
+    if (result.success) {
+      document.querySelectorAll('.unread').forEach(el => { el.classList.remove('unread'); el.classList.add('read'); });
+      document.querySelectorAll('button[onclick*="markAsRead"]').forEach(b => b.remove());
+      const banner = document.getElementById('unread-banner');
+      if (banner) banner.style.display = 'none';
+    } else {
+      alert('Error: ' + (result.error || 'Unknown error'));
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.inquiry-avatar').forEach(img => {
+      img.src = generateAvatarUrl(img.dataset.identifier || 'default');
+    });
+    if (window.InquiryNotifications) window.InquiryNotifications.checkUnreadInquiries();
+  });
+</script>
+{% endblock %}

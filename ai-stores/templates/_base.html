@@ -1,0 +1,197 @@
+{#- Normalise `store` so templates can use `store.field` regardless of SSR shape -#}
+{%- set store = (store[0] if store is sequence and not store is mapping and store else store) or {} -%}
+{#- Multi-tenant base path: "/{store}" for storefront/admin pages, "" for platform pages.
+    Every internal link/fetch is prefixed with this; /static/* stays global. -#}
+{%- set _store_slug = (request.scope.get('store_slug') if request is defined and request else None) -%}
+{%- set base_path = ('/' ~ _store_slug) if _store_slug else '' -%}
+{#- hex "#6366f1" -> "99 102 241" so Tailwind opacity works: rgb(var(--x) / <alpha>) -#}
+{%- macro rgbch(hex, fallback='#000000') -%}
+{%- set h = ((hex or fallback) | string | trim | replace('#','')) -%}
+{%- if h | length < 6 -%}{%- set h = (fallback | replace('#','')) -%}{%- endif -%}
+{{- h[0:2]|int(0,16) }} {{ h[2:4]|int(0,16) }} {{ h[4:6]|int(0,16) -}}
+{%- endmacro -%}
+<!doctype html>
+<html lang="{{ store.lang or 'en' }}" class="scroll-smooth">
+<head>
+  {# ── Opt-in analytics — rendered only when the store sets an ID ─────── #}
+  {% if store.google_tag_id %}
+  <script async src="https://www.googletagmanager.com/gtag/js?id={{ store.google_tag_id }}"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', '{{ store.google_tag_id }}');
+  </script>
+  {% endif %}
+  {% if store.meta_pixel_id %}
+  <script>
+  !function(f,b,e,v,n,t,s)
+  {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+  n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+  if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+  n.queue=[];t=b.createElement(e);t.async=!0;
+  t.src=v;s=b.getElementsByTagName(e)[0];
+  s.parentNode.insertBefore(t,s)}(window, document,'script',
+  'https://connect.facebook.net/en_US/fbevents.js');
+  fbq('init', '{{ store.meta_pixel_id }}');
+  fbq('track', 'PageView');
+  </script>
+  <noscript><img height="1" width="1" style="display:none"
+  src="https://www.facebook.com/tr?id={{ store.meta_pixel_id }}&ev=PageView&noscript=1"/></noscript>
+  {% endif %}
+
+  {% include "_partials/head_meta.html" %}
+
+  {# Tailwind CDN — keep last so it overrides our root styles when needed. #}
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    {# Theme tokens as first-class Tailwind colors. `<alpha-value>` lets opacity
+       modifiers work, e.g. bg-store-primary/20, ring-store-primary/40. #}
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            store: {
+              primary:     'rgb(var(--store-theme-primary) / <alpha-value>)',
+              secondary:   'rgb(var(--store-theme-secondary) / <alpha-value>)',
+              bg:          'rgb(var(--store-theme-background) / <alpha-value>)',
+              surface:     'rgb(var(--store-theme-surface) / <alpha-value>)',
+              text:        'rgb(var(--store-theme-text) / <alpha-value>)',
+              muted:       'rgb(var(--store-theme-text-secondary) / <alpha-value>)',
+              onprimary:   'rgb(var(--store-on-primary) / <alpha-value>)',
+              onsecondary: 'rgb(var(--store-on-secondary) / <alpha-value>)'
+            }
+          },
+          fontFamily: {
+            heading: ['var(--store-font-heading)'],
+            body: ['var(--store-font-body)']
+          },
+          borderRadius: { store: 'var(--store-radius)' }
+        }
+      }
+    };
+  </script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+
+  {# Brand fonts — driven by the store's chosen look (falls back to system). #}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family={{ store.fonts_google or 'Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700' }}&display=swap">
+
+  {# Theme variables → CSS custom properties. Colors are RGB *channels* (e.g.
+     "99 102 241") so utilities can apply opacity: rgb(var(--x) / <alpha>). #}
+  <style>
+    :root {
+      --store-theme-primary:        {{ rgbch(store.theme_primary, '#5e61f1') }};
+      --store-theme-secondary:      {{ rgbch(store.theme_secondary, '#22d3ee') }};
+      --store-theme-background:     {{ rgbch(store.theme_background, '#0b1120') }};
+      --store-theme-surface:        {{ rgbch(store.theme_surface, '#151d2e') }};
+      --store-theme-text:           {{ rgbch(store.theme_text, '#f8fafc') }};
+      --store-theme-text-secondary: {{ rgbch(store.theme_text_secondary, '#94a3b8') }};
+      --store-on-primary:           {{ rgbch(store.theme_on_primary, '#ffffff') }};
+      --store-on-secondary:         {{ rgbch(store.theme_on_secondary, '#0a0a0a') }};
+      --store-font-heading:         {{ store.font_heading or "'Space Grotesk', system-ui, sans-serif" }};
+      --store-font-body:            {{ store.font_body or "'Inter', system-ui, sans-serif" }};
+      --store-radius:               {{ store.theme_radius or '0.75rem' }};
+      --store-heading-transform:    {{ store.heading_transform or 'none' }};
+      --store-heading-spacing:      {{ store.heading_spacing or '-0.02em' }};
+    }
+    body {
+      background-color: rgb(var(--store-theme-background));
+      color: rgb(var(--store-theme-text));
+      font-family: var(--store-font-body);
+    }
+  </style>
+
+  {# Enable the motion layer before first paint (no image-fade flash), and
+     guarantee .fx-img always becomes visible even if microfx.js never loads. #}
+  <script>
+    (function () {
+      try {
+        if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          document.documentElement.classList.add('fx-on');
+          window.addEventListener('load', function () {
+            var e = document.querySelectorAll('.fx-img:not(.is-loaded)');
+            for (var i = 0; i < e.length; i++) e[i].classList.add('is-loaded');
+          });
+        }
+      } catch (_) { /* no-op */ }
+    })();
+  </script>
+
+  {% block json_ld %}
+    {% include "_partials/jsonld.html" %}
+  {% endblock %}
+
+  {% block head_extra %}{% endblock %}
+</head>
+<body class="{% block body_class %}{% endblock %}{% if nav_mode == 'admin' %} has-ai-launcher{% endif %}">
+  {# Page scroll progress bar (top edge, all pages). #}
+  <div id="scroll-progress" aria-hidden="true"></div>
+
+  {% block header %}
+    {% include "_partials/header.html" %}
+  {% endblock %}
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  {% block footer %}
+    {% include "_partials/footer.html" %}
+  {% endblock %}
+
+  {# Back-to-top (revealed by microfx.js once the page is scrolled). #}
+  <button id="to-top" type="button" aria-label="Back to top">
+    <i class="fas fa-arrow-up" aria-hidden="true"></i>
+  </button>
+
+  {# Store base path for client-side links/fetches ("" on platform pages). #}
+  <script>window.BASE_PATH = {{ base_path | tojson }};</script>
+
+  {# Shared JS: reveal + sticky header, navigation/mobile menu, motion layer, logout, service worker. #}
+  <script src="/static/js/reveal.js"></script>
+  <script src="/static/js/navigation.js"></script>
+  <script src="/static/js/microfx.js" defer></script>
+
+  <script>
+    (function () {
+      var years = document.querySelectorAll('[data-store-year]');
+      if (years.length) {
+        var y = new Date().getFullYear();
+        years.forEach(function (el) { el.textContent = y; });
+      }
+      document.querySelectorAll('[data-logout]').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+          try {
+            await fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' });
+          } finally {
+            window.location.href = (window.BASE_PATH || '') + '/';
+          }
+        });
+      });
+
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker
+            .register('/static/service-worker.js', { scope: '/' })
+            .catch(function () { /* silent */ });
+        });
+      }
+    })();
+  </script>
+
+  {% if nav_mode == 'admin' %}
+  {# ── Conversational store editor (admin only) ──────────────────────────
+     Floating chat that turns natural language into validated, confirm-first
+     edits to layout, copy, catalog and specials. Talks to /admin/ai/*. #}
+  <script>
+    window.STORE_ID = {% if store and store._id %}{{ (store._id | string) | tojson }}{% else %}null{% endif %};
+  </script>
+  <script src="/static/js/admin-chat.js" defer></script>
+  {% endif %}
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

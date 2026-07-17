@@ -1,0 +1,39 @@
+# Keep the build context lean — only ship what the image actually needs.
+# The Dockerfile COPYs templates/, static/, manifest.json, store_template.json,
+# and every top-level *.py module (main.py, ai_editor.py, notifications.py, …).
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Secrets & local env (never bake into an image). .env.example is kept.
+.env
+.env.*
+!.env.example
+
+# Python caches / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local virtualenvs
+.venv/
+venv/
+env/
+
+# Docs & dev tooling (not needed at runtime)
+*.md
+Makefile
+docker-compose*.yml
+Dockerfile
+.dockerignore
+
+# Editor / OS cruft
+.DS_Store
+.idea/
+.vscode/
+*.swp

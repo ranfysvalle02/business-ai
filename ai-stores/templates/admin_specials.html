@@ -1,0 +1,237 @@
+{% extends "_base.html" %}
+
+{%- set store = (store[0] if store is sequence and not store is mapping and store else store) or {} -%}
+{% set seo_title = 'Manage Specials — ' ~ (store.name or 'AI Stores') %}
+{% set robots    = 'noindex,nofollow' %}
+{% set nav_mode  = 'admin' %}
+
+{% block head_extra %}
+<style>
+  .store-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 1000; overflow: auto; }
+  .store-modal.is-active { display: flex; align-items: flex-start; justify-content: center; padding: 2rem 1rem; }
+  .store-modal-content { background: #1f2937; border: 1px solid #374151; border-radius: .75rem; width: 100%; max-width: 640px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 sm:px-6 py-6 sm:py-10">
+  <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 sm:mb-8 gap-4 reveal">
+    <h1 class="text-2xl sm:text-4xl font-bold">Manage Specials</h1>
+    <div class="flex flex-col sm:flex-row items-stretch gap-2 sm:gap-3 w-full sm:w-auto">
+      <button onclick="openSpecialModal()" class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors">
+        <i class="fas fa-plus mr-2"></i>Add Special
+      </button>
+      <a href="{{ base_path }}/admin/dashboard" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded-lg transition-colors text-center">
+        <i class="fas fa-arrow-left mr-2"></i>Dashboard
+      </a>
+    </div>
+  </div>
+
+  <div class="reveal bg-gray-800 border border-gray-700 rounded-xl p-4 sm:p-6 mb-6">
+    <div class="flex justify-between items-center">
+      <h2 class="text-xl sm:text-2xl font-bold">All Specials</h2>
+      <span class="text-gray-400 text-sm">{{ specials|length }} total</span>
+    </div>
+  </div>
+
+  {% if specials %}
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+    {% for special in specials %}
+    <div class="store-card reveal bg-gray-800 border border-gray-700 rounded-xl overflow-hidden" data-reveal-delay="{{ loop.index0 % 6 }}">
+      <div class="store-card-img-wrap">
+        {% if special.image_url %}
+        <img src="{{ special.image_url }}" alt="{{ special.title }}" loading="lazy" class="store-card-img w-full h-48 object-cover">
+        {% else %}
+        <div class="w-full h-48 bg-gray-700 flex items-center justify-center"><i class="fas fa-image text-gray-500 text-4xl"></i></div>
+        {% endif %}
+      </div>
+      <div class="p-5">
+        <h3 class="text-lg font-bold mb-2 text-white">{{ special.title }}</h3>
+        {% if special.description %}<p class="text-gray-300 text-sm mb-2 line-clamp-2">{{ special.description }}</p>{% endif %}
+        {% if special.content %}<p class="text-gray-400 text-sm mb-3 line-clamp-3">{{ special.content }}</p>{% endif %}
+        <div class="space-y-2 mb-4 text-sm">
+          {% if special.discount_percent %}<div class="flex items-center text-green-400 font-semibold"><i class="fas fa-percent mr-2"></i><span>{{ special.discount_percent }}% Off</span></div>{% endif %}
+          {% if special.valid_until %}<div class="flex items-center text-gray-400"><i class="fas fa-calendar mr-2 text-purple-400"></i><span>Valid until: {{ special.valid_until.strftime('%Y-%m-%d') if special.valid_until.__class__.__name__ == 'datetime' else special.valid_until[:10] }}</span></div>{% endif %}
+        </div>
+        <div class="flex gap-2">
+          <button onclick="openSpecialModal('{{ special._id }}')" class="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-sm transition-colors"><i class="fas fa-edit mr-1"></i>Edit</button>
+          <button onclick="deleteSpecial('{{ special._id }}', '{{ special.title }}')" class="flex-1 px-3 py-2 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg text-sm transition-colors"><i class="fas fa-trash mr-1"></i>Delete</button>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="reveal bg-gray-800 border border-gray-700 rounded-xl p-8 sm:p-12 text-center">
+    <i class="fas fa-star text-6xl text-gray-600 mb-4"></i>
+    <p class="text-xl text-gray-400 mb-2">No specials yet</p>
+    <button onclick="openSpecialModal()" class="mt-4 px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors"><i class="fas fa-plus mr-2"></i>Add Your First Special</button>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Modal -->
+<div id="specialModal" class="store-modal" role="dialog" aria-modal="true">
+  <div class="store-modal-content">
+    <div class="p-5 sm:p-6">
+      <div class="flex justify-between items-center mb-6">
+        <h2 id="specialModalTitle" class="text-2xl font-bold">Add Special</h2>
+        <button type="button" onclick="closeSpecialModal()" class="text-gray-400 hover:text-white text-2xl" aria-label="Close">&times;</button>
+      </div>
+      <form id="specialForm" class="space-y-4">
+        <input type="hidden" id="specialId" name="special_id">
+        <div>
+          <label for="specialTitle" class="block text-gray-400 text-sm mb-2">Title *</label>
+          <input type="text" id="specialTitle" name="title" required class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div>
+          <label for="specialDescription" class="block text-gray-400 text-sm mb-2">Description</label>
+          <input type="text" id="specialDescription" name="description" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div>
+          <label for="specialContent" class="block text-gray-400 text-sm mb-2">Content</label>
+          <textarea id="specialContent" name="content" rows="4" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label for="specialDiscount" class="block text-gray-400 text-sm mb-2">Discount %</label>
+            <input type="number" id="specialDiscount" name="discount_percent" step="0.01" min="0" max="100" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+          <div>
+            <label for="specialValidUntil" class="block text-gray-400 text-sm mb-2">Valid Until</label>
+            <input type="date" id="specialValidUntil" name="valid_until" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+        </div>
+        <div>
+          <label class="block text-gray-400 text-sm mb-2">Image</label>
+          <div class="space-y-3">
+            <div class="border-2 border-dashed border-gray-600 rounded-lg p-4 text-center hover:border-gray-500 transition-colors">
+              <input type="file" id="specialImageFile" accept="image/*" class="hidden" onchange="handleSpecialImageSelect(this)">
+              <label for="specialImageFile" class="cursor-pointer flex flex-col items-center">
+                <i class="fas fa-cloud-upload-alt text-3xl text-gray-400 mb-2"></i>
+                <span class="text-sm text-gray-400">Click to upload</span>
+              </label>
+            </div>
+            <div id="specialImagePreview" class="hidden">
+              <img id="specialImagePreviewImg" src="" alt="Preview" class="w-full h-48 object-cover rounded-lg mb-2">
+              <button type="button" onclick="clearSpecialImagePreview()" class="w-full px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg text-sm"><i class="fas fa-times mr-2"></i>Remove</button>
+            </div>
+            <input type="url" id="specialImageUrl" name="image_url" placeholder="Or paste image URL" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <div id="specialImageUploadStatus" class="text-sm"></div>
+          </div>
+        </div>
+        <div class="flex gap-3 pt-4">
+          <button type="submit" class="store-btn flex-1 px-6 py-2 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors"><i class="fas fa-save mr-2"></i>Save</button>
+          <button type="button" onclick="closeSpecialModal()" class="flex-1 px-6 py-2 bg-gray-600 hover:bg-gray-500 text-white font-bold rounded-lg transition-colors">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function openSpecialModal(id = null) {
+    const modal = document.getElementById('specialModal');
+    const form = document.getElementById('specialForm');
+    const title = document.getElementById('specialModalTitle');
+    if (id) {
+      title.textContent = 'Edit Special';
+      fetch(`${window.BASE_PATH || ''}/api/specials/${id}`, { credentials: 'same-origin' })
+        .then(res => res.ok ? res.json() : Promise.reject(new Error('HTTP ' + res.status)))
+        .then(payload => {
+          const sp = payload.data || payload;
+          document.getElementById('specialId').value = id;
+          document.getElementById('specialTitle').value = sp.title || '';
+          document.getElementById('specialDescription').value = sp.description || '';
+          document.getElementById('specialContent').value = sp.content || '';
+          document.getElementById('specialDiscount').value = sp.discount_percent || '';
+          if (sp.valid_until) {
+            const vu = typeof sp.valid_until === 'string' ? sp.valid_until.split('T')[0] : new Date(sp.valid_until).toISOString().split('T')[0];
+            document.getElementById('specialValidUntil').value = vu;
+          }
+          document.getElementById('specialImageUrl').value = sp.image_url || '';
+          if (sp.image_url) showSpecialImagePreview(sp.image_url);
+        })
+        .catch(() => alert('Error loading special data'));
+    } else {
+      title.textContent = 'Add Special';
+      form.reset();
+      document.getElementById('specialId').value = '';
+      clearSpecialImagePreview();
+    }
+    modal.classList.add('is-active');
+  }
+
+  function closeSpecialModal() {
+    document.getElementById('specialModal').classList.remove('is-active');
+  }
+
+  async function handleSpecialImageSelect(input) {
+    const file = input.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { alert('Please select an image'); input.value = ''; return; }
+    if (file.size > 10 * 1024 * 1024) { alert('Max 10MB'); input.value = ''; return; }
+    const statusDiv = document.getElementById('specialImageUploadStatus');
+    statusDiv.innerHTML = '<span class="text-blue-400"><i class="fas fa-spinner fa-spin mr-2"></i>Uploading...</span>';
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('folder', 'specials');
+      const res = await fetch((window.BASE_PATH || '') + '/admin/upload-image', { method: 'POST', credentials: 'same-origin', body: fd });
+      const result = await res.json();
+      if (res.ok && result.ok) {
+        document.getElementById('specialImageUrl').value = result.image_url;
+        showSpecialImagePreview(result.image_url);
+        statusDiv.innerHTML = '<span class="text-green-400"><i class="fas fa-check-circle mr-2"></i>Uploaded!</span>';
+        setTimeout(() => { statusDiv.innerHTML = ''; }, 3000);
+      } else {
+        statusDiv.innerHTML = '<span class="text-red-400">' + (result.detail || 'Upload failed') + '</span>';
+      }
+    } catch (err) { statusDiv.innerHTML = '<span class="text-red-400">Error: ' + err.message + '</span>'; }
+  }
+
+  function showSpecialImagePreview(url) {
+    document.getElementById('specialImagePreviewImg').src = url;
+    document.getElementById('specialImagePreview').classList.remove('hidden');
+  }
+  function clearSpecialImagePreview() {
+    document.getElementById('specialImagePreview').classList.add('hidden');
+    document.getElementById('specialImagePreviewImg').src = '';
+    document.getElementById('specialImageFile').value = '';
+    document.getElementById('specialImageUrl').value = '';
+  }
+
+  document.getElementById('specialForm').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(this));
+    if (data.discount_percent) data.discount_percent = parseFloat(data.discount_percent);
+    if (data.valid_until) data.valid_until = new Date(data.valid_until).toISOString();
+    const id = data.special_id;
+    delete data.special_id;
+    const url = (window.BASE_PATH || '') + (id ? `/api/specials/${id}` : '/api/specials');
+    const method = id ? 'PATCH' : 'POST';
+    try {
+      const res = await fetch(url, { method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || `HTTP ${res.status}`); }
+      closeSpecialModal();
+      window.location.reload();
+    } catch (err) { alert('Error: ' + err.message); }
+  });
+
+  async function deleteSpecial(id, title) {
+    if (!confirm(`Delete "${title}"?`)) return;
+    try {
+      const res = await fetch(`${window.BASE_PATH || ''}/api/specials/${id}`, { method: 'DELETE', credentials: 'same-origin' });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || `HTTP ${res.status}`); }
+      window.location.reload();
+    } catch (err) { alert('Error: ' + err.message); }
+  }
+
+  window.addEventListener('click', function (ev) {
+    const modal = document.getElementById('specialModal');
+    if (ev.target === modal) closeSpecialModal();
+  });
+</script>
+{% endblock %}

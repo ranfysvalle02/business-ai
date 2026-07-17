@@ -1,0 +1,23 @@
+<footer class="mt-10 sm:mt-16 py-8 sm:py-10 bg-store-surface text-store-text">
+  <div class="container mx-auto px-4 sm:px-6 text-center">
+    <img src="{{ store.logo_url or '/static/img/logo.png' }}"
+         alt="{{ store.name }} logo"
+         class="store-logo h-16 w-16 rounded-full mx-auto mb-4 object-cover">
+    <p class="font-semibold">{{ store.name or 'AI Stores' }}</p>
+    {% if store.tagline %}<p class="text-sm text-store-muted mt-1">{{ store.tagline }}</p>{% endif %}
+    {% if store.socials %}
+    <div class="mt-4 flex justify-center gap-5">
+      {% for social in store.socials %}
+      {% if social.url %}
+      <a href="{{ social.url }}" target="_blank" rel="noopener noreferrer"
+         class="text-store-text transition hover:text-store-primary text-2xl hover:scale-110"
+         aria-label="{{ social.icon }}">
+        <i class="fab fa-{{ social.icon }}"></i>
+      </a>
+      {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+    <p class="text-xs text-store-muted mt-4">© <span data-store-year>2026</span> {{ store.name or 'AI Stores' }}. All rights reserved.</p>
+  </div>
+</footer>

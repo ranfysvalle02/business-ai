@@ -1,0 +1,860 @@
+{% extends "_base.html" %}
+
+{%- set store = (store[0] if store is sequence and not store is mapping and store else store) or {} -%}
+{% set seo_title = 'Admin Dashboard — ' ~ (store.name or 'AI Stores') %}
+{% set robots    = 'noindex,nofollow' %}
+{% set nav_mode  = 'admin' %}
+
+{% block head_extra %}
+<script src="/static/js/notifications.js"></script>
+<script src="/static/js/theme-presets.js"></script>
+<style>
+  .store-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 1.5rem; height: 1.5rem; padding: 0 .5rem;
+    font-size: .75rem; font-weight: 700; line-height: 1;
+    color: white; background: #ef4444; border-radius: 9999px;
+    position: absolute; top: -8px; right: -8px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 sm:px-6 py-6 sm:py-10">
+  <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 sm:mb-8 gap-4 reveal">
+    <h1 class="text-2xl sm:text-4xl font-bold">Dashboard</h1>
+    <div class="flex items-center space-x-3 w-full sm:w-auto">
+      <button id="request-notification-permission" type="button"
+              class="hidden w-full sm:w-auto px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors">
+        <i class="fas fa-bell mr-2"></i>
+        Enable Notifications
+      </button>
+    </div>
+  </div>
+
+  <!-- Stat cards -->
+  <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-6 sm:mb-8">
+    <div class="store-card reveal bg-gray-800 border border-gray-700 rounded-xl p-4 sm:p-6" data-reveal-delay="0">
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-gray-400 text-xs sm:text-sm">Items</p>
+          <p class="text-2xl sm:text-3xl font-bold" data-count="items">—</p>
+        </div>
+        <i class="fas fa-box text-2xl sm:text-3xl text-blue-500"></i>
+      </div>
+    </div>
+    <div class="store-card reveal bg-gray-800 border border-gray-700 rounded-xl p-4 sm:p-6" data-reveal-delay="1">
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-gray-400 text-xs sm:text-sm">Specials</p>
+          <p class="text-2xl sm:text-3xl font-bold" data-count="specials">—</p>
+        </div>
+        <i class="fas fa-star text-2xl sm:text-3xl text-yellow-500"></i>
+      </div>
+    </div>
+    <div class="store-card reveal bg-gray-800 border border-gray-700 rounded-xl p-4 sm:p-6" data-reveal-delay="2">
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-gray-400 text-xs sm:text-sm">Slideshow</p>
+          <p class="text-2xl sm:text-3xl font-bold" data-count="slideshow">—</p>
+        </div>
+        <i class="fas fa-images text-2xl sm:text-3xl text-green-500"></i>
+      </div>
+    </div>
+    <div class="store-card reveal bg-gray-800 border border-gray-700 rounded-xl p-4 sm:p-6 relative" data-reveal-delay="3">
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-gray-400 text-xs sm:text-sm">Inquiries</p>
+          <p class="text-2xl sm:text-3xl font-bold" data-count="inquiries">—</p>
+          <p class="text-xs sm:text-sm text-blue-400 mt-1 hidden" data-unread-line>
+            <i class="fas fa-circle mr-1"></i>
+            <span data-count="inquiries_unread">0</span> unread
+          </p>
+        </div>
+        <div class="relative">
+          <i class="fas fa-envelope text-2xl sm:text-3xl text-purple-500"></i>
+          <span id="unread-inquiries-badge" class="store-badge hidden">0</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quick Actions -->
+  <div class="reveal bg-gray-800 border border-gray-700 rounded-xl p-4 sm:p-6 lg:p-8 mb-6">
+    <h2 class="text-xl sm:text-2xl font-bold mb-4 sm:mb-6">
+      <i class="fas fa-bolt mr-2"></i>
+      Quick Actions
+    </h2>
+    <div class="grid grid-cols-2 lg:grid-cols-6 gap-3 sm:gap-4">
+      <a href="{{ base_path }}/" class="px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg text-center transition-colors text-sm sm:text-base">
+        <i class="fas fa-store mr-2"></i>
+        View Store
+      </a>
+      <a href="{{ base_path }}/admin/layout" class="px-4 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg text-center transition-colors text-sm sm:text-base">
+        <i class="fas fa-layer-group mr-2"></i>
+        Layout
+      </a>
+      <a href="{{ base_path }}/admin/items" class="px-4 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg text-center transition-colors text-sm sm:text-base">
+        <i class="fas fa-box mr-2"></i>
+        Items
+      </a>
+      <a href="{{ base_path }}/admin/specials" class="px-4 py-3 bg-yellow-600 hover:bg-yellow-700 text-white font-bold rounded-lg text-center transition-colors text-sm sm:text-base">
+        <i class="fas fa-star mr-2"></i>
+        Specials
+      </a>
+      <a href="{{ base_path }}/admin/slideshow" class="px-4 py-3 bg-pink-600 hover:bg-pink-700 text-white font-bold rounded-lg text-center transition-colors text-sm sm:text-base">
+        <i class="fas fa-images mr-2"></i>
+        Slideshow
+      </a>
+      <a href="{{ base_path }}/admin/inquiries" class="px-4 py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg text-center relative transition-colors text-sm sm:text-base">
+        <i class="fas fa-envelope mr-2"></i>
+        Inquiries
+        <span data-unread-pill class="hidden ml-2 px-2 py-0.5 bg-red-500 text-white text-xs font-bold rounded-full">0</span>
+      </a>
+    </div>
+  </div>
+
+  <!-- Store Information -->
+  <div class="reveal bg-gray-800 border border-gray-700 rounded-xl p-4 sm:p-6 lg:p-8 mb-6">
+    <h2 class="text-xl sm:text-2xl font-bold mb-4 sm:mb-6">
+      <i class="fas fa-info-circle mr-2"></i>
+      Store Information
+    </h2>
+    <form id="store-info-form" class="space-y-4 sm:space-y-6">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+        <div>
+          <label for="store_name" class="block text-gray-400 text-sm mb-2">Store Name</label>
+          <input type="text" id="store_name" name="name" value="{{ store.name or '' }}" required
+                 class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div>
+          <label for="store_slug" class="block text-gray-400 text-sm mb-2">Slug ID</label>
+          <input type="text" id="store_slug" name="slug_id" value="{{ store.slug_id or '' }}" disabled
+                 class="w-full px-4 py-2 bg-gray-600 border border-gray-600 text-gray-400 rounded-lg cursor-not-allowed">
+          <p class="text-xs text-gray-500 mt-1">Slug ID cannot be changed</p>
+        </div>
+        <div>
+          <label for="store_email" class="block text-gray-400 text-sm mb-2">Contact Email</label>
+          <input type="email" id="store_email" name="email" value="{{ store.email or '' }}"
+                 class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div>
+          <label for="store_phone" class="block text-gray-400 text-sm mb-2">Phone</label>
+          <input type="text" id="store_phone" name="phone" value="{{ store.phone or '' }}"
+                 class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div>
+          <label for="store_phone_display" class="block text-gray-400 text-sm mb-2">Phone Display</label>
+          <input type="text" id="store_phone_display" name="phone_display" value="{{ store.phone_display or '' }}"
+                 class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <p class="text-xs text-gray-500 mt-1">Optional: How phone should be displayed</p>
+        </div>
+        <div class="md:col-span-2">
+          <label for="store_address" class="block text-gray-400 text-sm mb-2">Address</label>
+          <textarea id="store_address" name="address" rows="2"
+                    class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">{{ store.address or '' }}</textarea>
+        </div>
+        <div class="md:col-span-2">
+          <label for="store_tagline" class="block text-gray-400 text-sm mb-2">Tagline</label>
+          <input type="text" id="store_tagline" name="tagline" value="{{ store.tagline or '' }}"
+                 class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                 placeholder="Your store's short, memorable tagline">
+          <p class="text-xs text-gray-500 mt-1">Short tagline — used as SEO subtitle and hero subtitle</p>
+        </div>
+        <div class="md:col-span-2">
+          <label for="store_about" class="block text-gray-400 text-sm mb-2">About</label>
+          <textarea id="store_about" name="about_text" rows="4"
+                    class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">{{ store.about_text or '' }}</textarea>
+          <p class="text-xs text-gray-500 mt-1">Detailed description — used as default meta description</p>
+        </div>
+        <div class="md:col-span-2">
+          <label for="store_hours" class="block text-gray-400 text-sm mb-2">Business Hours</label>
+          <textarea id="store_hours" name="hours" rows="3"
+                    class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">{{ store.hours or '' }}</textarea>
+          <p class="text-xs text-gray-500 mt-1">Enter each day on a new line</p>
+        </div>
+        <div class="md:col-span-2">
+          <label for="store_inventory_description" class="block text-gray-400 text-sm mb-2">Catalog Description</label>
+          <textarea id="store_inventory_description" name="inventory_description" rows="3"
+                    class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">{{ store.inventory_description or '' }}</textarea>
+        </div>
+      </div>
+
+      <div class="mt-6 pt-6 border-t border-gray-700">
+        <h3 class="text-xl font-bold mb-1">
+          <i class="fas fa-bell mr-2"></i>
+          Lead notifications
+        </h3>
+        <p class="text-xs text-gray-500 mb-4">Get an email the moment a new inquiry lands, so you never miss a lead. Requires the platform email key (Resend) to be configured by the operator.</p>
+        <label class="flex items-center gap-3 mb-4 cursor-pointer">
+          <input type="checkbox" id="notify_enabled" name="notify_enabled"
+                 {% if store.notify_enabled is not defined or store.notify_enabled %}checked{% endif %}
+                 class="h-5 w-5 rounded border-gray-600 bg-gray-700 text-blue-600 focus:ring-blue-500">
+          <span class="text-gray-200 text-sm font-medium">Email me about new inquiries</span>
+        </label>
+        <div>
+          <label for="notify_email" class="block text-gray-400 text-sm mb-2">Notification email <span class="text-gray-500">(optional override)</span></label>
+          <input type="email" id="notify_email" name="notify_email" value="{{ store.notify_email or '' }}"
+                 placeholder="Defaults to your contact email above"
+                 class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <p class="text-xs text-gray-500 mt-1">Leave blank to use your store contact email.</p>
+        </div>
+      </div>
+
+      <div class="mt-6 pt-6 border-t border-gray-700">
+        <h3 class="text-xl font-bold mb-4">
+          <i class="fas fa-share-alt mr-2"></i>
+          Social Media Links
+        </h3>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-gray-400 text-sm mb-2"><i class="fab fa-facebook mr-2"></i>Facebook URL</label>
+            <input type="url" name="social_facebook"
+                   value="{% if store.socials %}{% for social in store.socials %}{% if social.icon == 'facebook' %}{{ social.url }}{% endif %}{% endfor %}{% endif %}"
+                   class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                   placeholder="https://facebook.com/yourpage">
+          </div>
+          <div>
+            <label class="block text-gray-400 text-sm mb-2"><i class="fab fa-instagram mr-2"></i>Instagram URL</label>
+            <input type="url" name="social_instagram"
+                   value="{% if store.socials %}{% for social in store.socials %}{% if social.icon == 'instagram' %}{{ social.url }}{% endif %}{% endfor %}{% endif %}"
+                   class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                   placeholder="https://instagram.com/yourpage">
+          </div>
+          <div>
+            <label class="block text-gray-400 text-sm mb-2"><i class="fab fa-twitter mr-2"></i>Twitter URL</label>
+            <input type="url" name="social_twitter"
+                   value="{% if store.socials %}{% for social in store.socials %}{% if social.icon == 'twitter' %}{{ social.url }}{% endif %}{% endfor %}{% endif %}"
+                   class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                   placeholder="https://twitter.com/yourpage">
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-6 pt-6 border-t border-gray-700">
+        <h3 class="text-xl font-bold mb-1">
+          <i class="fas fa-palette mr-2"></i>
+          Appearance
+        </h3>
+        <p class="text-xs text-gray-500 mb-4">Pick a look, generate a palette from your brand color, or fine-tune everything by hand. Changes preview live and save with the form.</p>
+
+        <!-- Simple / Advanced tabs -->
+        <div id="ap-tablist" class="inline-flex rounded-lg bg-gray-900 border border-gray-700 p-1 mb-5" role="tablist" aria-label="Appearance mode">
+          <button type="button" id="ap-tab-simple" role="tab" aria-selected="true" aria-controls="ap-panel-simple"
+                  class="ap-tab px-4 py-1.5 rounded-md text-sm font-bold transition-colors">
+            <i class="fas fa-wand-magic-sparkles mr-2" aria-hidden="true"></i>Simple
+          </button>
+          <button type="button" id="ap-tab-advanced" role="tab" aria-selected="false" aria-controls="ap-panel-advanced"
+                  class="ap-tab px-4 py-1.5 rounded-md text-sm font-bold transition-colors">
+            <i class="fas fa-sliders mr-2" aria-hidden="true"></i>Advanced
+          </button>
+        </div>
+
+        <!-- Simple panel: presets + brand-color generator -->
+        <div id="ap-panel-simple" role="tabpanel" aria-labelledby="ap-tab-simple" tabindex="0">
+          <p class="text-gray-400 text-sm mb-2">Pick a look</p>
+          <div id="ap-preset-gallery" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6"></div>
+
+          <div class="rounded-xl border border-gray-700 p-4">
+            <p class="text-sm font-bold mb-1"><i class="fas fa-eye-dropper mr-2 text-blue-400"></i>Start from your brand color</p>
+            <p class="text-xs text-gray-500 mb-3">Pick one color (your logo or brand color) and we'll build a complete, accessible palette around it.</p>
+            <div class="flex flex-col sm:flex-row sm:items-end gap-3">
+              <div>
+                <label for="ap_brand_color" class="block text-gray-400 text-xs mb-1">Brand color</label>
+                <div class="flex items-center gap-2">
+                  <input type="color" id="ap_brand_color" value="{{ store.theme_primary or '#5e61f1' }}"
+                         class="h-10 w-12 shrink-0 rounded cursor-pointer bg-gray-700 border border-gray-600 p-1">
+                  <input type="text" id="ap_brand_color_hex" value="{{ store.theme_primary or '#5e61f1' }}" aria-label="Brand color hex"
+                         class="w-28 px-3 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+              </div>
+              <div>
+                <span class="block text-gray-400 text-xs mb-1">Mood</span>
+                <div class="inline-flex rounded-lg bg-gray-900 border border-gray-700 p-1" role="group" aria-label="Palette mood">
+                  <button type="button" data-mode="dark" aria-pressed="true" class="ap-mode px-3 py-1.5 rounded-md text-sm font-semibold transition-colors">Dark</button>
+                  <button type="button" data-mode="light" aria-pressed="false" class="ap-mode px-3 py-1.5 rounded-md text-sm font-semibold transition-colors">Light</button>
+                </div>
+              </div>
+              <button type="button" id="ap-generate"
+                      class="sm:ml-auto px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors">
+                <i class="fas fa-wand-magic-sparkles mr-2"></i>Generate palette
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Advanced panel: raw color/font/radius controls -->
+        <div id="ap-panel-advanced" class="hidden" role="tabpanel" aria-labelledby="ap-tab-advanced" tabindex="0">
+          <!-- Colors -->
+          <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
+            {% set _colors = [
+              ('theme_primary', 'Buttons and links', store.theme_primary or '#5e61f1', 'Your main brand color — buttons, links, and highlights.'),
+              ('theme_secondary', 'Highlights', store.theme_secondary or '#22d3ee', 'A secondary pop color for prices, badges, and accents.'),
+              ('theme_background', 'Page background', store.theme_background or '#0b1120', 'The base background color of every page.'),
+              ('theme_surface', 'Card background', store.theme_surface or '#151d2e', 'Background for cards, panels, and the header.'),
+              ('theme_text', 'Main text', store.theme_text or '#f8fafc', 'Primary text color for headings and body copy.'),
+              ('theme_text_secondary', 'Secondary text', store.theme_text_secondary or '#94a3b8', 'Muted text for captions, taglines, and hints.')
+            ] %}
+            {% for field, label, value, help in _colors %}
+            <div>
+              <label class="flex items-center gap-1.5 text-gray-400 text-sm mb-2">
+                {{ label }}
+                <i class="fas fa-circle-info text-gray-600 text-xs cursor-help rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                   role="img" tabindex="0" aria-label="{{ help }}" title="{{ help }}"></i>
+              </label>
+              <div class="flex items-center gap-2">
+                <input type="color" name="{{ field }}" id="ap_{{ field }}" value="{{ value }}"
+                       class="h-10 w-12 shrink-0 rounded cursor-pointer bg-gray-700 border border-gray-600 p-1">
+                <input type="text" data-hex-for="ap_{{ field }}" value="{{ value }}" aria-label="{{ label }} hex"
+                       class="w-full px-3 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+
+          <!-- Fonts + radius -->
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+            <div>
+              <label for="ap_font_heading_select" class="block text-gray-400 text-sm mb-2">Heading font</label>
+              <select id="ap_font_heading_select"
+                      class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
+            </div>
+            <div>
+              <label for="ap_font_body_select" class="block text-gray-400 text-sm mb-2">Body font</label>
+              <select id="ap_font_body_select"
+                      class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
+            </div>
+            <div>
+              <label for="ap_radius_range" class="block text-gray-400 text-sm mb-2">Corner radius: <span id="ap_radius_val" class="font-mono text-gray-300"></span></label>
+              <input type="range" id="ap_radius_range" min="0" max="28" step="1" class="w-full mt-3 accent-blue-500">
+            </div>
+          </div>
+        </div>
+
+        <!-- Persisted-but-derived fields -->
+        <input type="hidden" name="style_preset"      id="ap_style_preset"      value="{{ store.style_preset or 'midnight' }}">
+        <input type="hidden" name="font_heading"      id="ap_font_heading"      value="{{ store.font_heading or "'Space Grotesk', system-ui, sans-serif" }}">
+        <input type="hidden" name="font_body"         id="ap_font_body"         value="{{ store.font_body or "'Inter', system-ui, sans-serif" }}">
+        <input type="hidden" name="fonts_google"      id="ap_fonts_google"      value="{{ store.fonts_google or 'Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700' }}">
+        <input type="hidden" name="theme_radius"      id="ap_theme_radius"      value="{{ store.theme_radius or '0.75rem' }}">
+        <input type="hidden" name="heading_transform" id="ap_heading_transform" value="{{ store.heading_transform or 'none' }}">
+        <input type="hidden" name="heading_spacing"   id="ap_heading_spacing"   value="{{ store.heading_spacing or '-0.02em' }}">
+        {# Auto-derived button text colors (recomputed for legibility on any color change). #}
+        <input type="hidden" name="theme_on_primary"   id="ap_theme_on_primary"   value="{{ store.theme_on_primary or '#ffffff' }}">
+        <input type="hidden" name="theme_on_secondary" id="ap_theme_on_secondary" value="{{ store.theme_on_secondary or '#0a0a0a' }}">
+
+        <!-- Live preview -->
+        <div class="mt-6">
+          <p class="text-gray-400 text-sm mb-2">Live preview</p>
+          <div id="ap-preview" class="bg-store-bg text-store-text rounded-xl overflow-hidden border border-gray-700 p-5">
+            <span class="inline-block font-body text-xs font-bold tracking-[0.18em] uppercase text-store-primary mb-3">Preview</span>
+            <h3 class="text-store-text text-2xl font-extrabold">{{ store.name or 'Your Store Name' }}</h3>
+            <p class="text-store-muted mt-1">{{ store.tagline or 'A short tagline shows up right here.' }}</p>
+            <div class="bg-store-surface border border-store-text/10 rounded-store mt-4 p-4">
+              <p class="text-store-text font-bold">Featured item</p>
+              <p class="text-store-secondary font-bold mt-1">$49.00</p>
+              <div class="flex flex-wrap items-center gap-2 mt-3">
+                <span class="inline-block bg-store-primary text-store-onprimary rounded-store px-4 py-2 font-bold text-sm">Primary</span>
+                <span class="inline-block bg-store-text/10 text-store-text border border-store-text/30 rounded-store px-4 py-2 font-bold text-sm">Secondary</span>
+                <span class="inline-block bg-store-secondary text-store-onsecondary rounded-store px-4 py-2 font-bold text-sm">Accent</span>
+                <span class="text-xs font-bold px-2 py-1 rounded-full bg-store-primary/15 text-store-primary border border-store-primary/30">Available</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex flex-col sm:flex-row items-stretch sm:items-center justify-between pt-4 border-t border-gray-700 gap-4">
+        <div id="store-info-message" class="text-sm"></div>
+        <div class="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+          <button type="button" id="ap-reset" class="w-full sm:w-auto px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold rounded-lg transition-colors">
+            <i class="fas fa-rotate-left mr-2"></i>
+            Reset to saved
+          </button>
+          <button type="submit" class="store-btn w-full sm:w-auto px-6 py-2 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors">
+            <i class="fas fa-save mr-2"></i>
+            Save Changes
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  {% raw %}
+  const STORE_ID = {% endraw %}{{ (store._id | string) | tojson }}{% raw %};
+
+  async function apiJson(url, opts = {}) {
+    const res = await fetch((window.BASE_PATH || '') + url, {
+      ...opts,
+      credentials: 'same-origin',
+      headers: {
+        'Accept': 'application/json',
+        ...(opts.headers || {}),
+        ...(opts.body && !(opts.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {})
+      }
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || `HTTP ${res.status}`);
+    }
+    return res.json();
+  }
+
+  async function loadCounts() {
+    try {
+      const [items, specials, slideshow, inquiries, unread] = await Promise.all([
+        apiJson('/api/items/_count'),
+        apiJson('/api/specials/_count'),
+        apiJson('/api/slideshow/_count'),
+        apiJson('/api/inquiries/_count'),
+        apiJson('/api/inquiries/_count?scope=unread')
+      ]);
+      document.querySelector('[data-count="items"]').textContent     = items.count ?? items.total ?? 0;
+      document.querySelector('[data-count="specials"]').textContent  = specials.count ?? specials.total ?? 0;
+      document.querySelector('[data-count="slideshow"]').textContent = slideshow.count ?? slideshow.total ?? 0;
+      document.querySelector('[data-count="inquiries"]').textContent = inquiries.count ?? inquiries.total ?? 0;
+      const u = unread.count ?? unread.total ?? 0;
+      document.querySelector('[data-count="inquiries_unread"]').textContent = u;
+      const badge = document.getElementById('unread-inquiries-badge');
+      const pill = document.querySelector('[data-unread-pill]');
+      const line = document.querySelector('[data-unread-line]');
+      [badge, pill, line].forEach((el) => {
+        if (!el) return;
+        if (u > 0) el.classList.remove('hidden'); else el.classList.add('hidden');
+      });
+      if (pill) pill.textContent = u;
+      if (badge) badge.textContent = u;
+    } catch (err) {
+      console.error('loadCounts failed', err);
+    }
+  }
+  loadCounts();
+
+  document.addEventListener('DOMContentLoaded', function () {
+    const permissionButton = document.getElementById('request-notification-permission');
+    if (permissionButton && 'Notification' in window) {
+      if (Notification.permission === 'default') {
+        permissionButton.classList.remove('hidden');
+        permissionButton.addEventListener('click', async function () {
+          try {
+            const permission = await Notification.requestPermission();
+            if (permission === 'granted') {
+              permissionButton.classList.add('hidden');
+              if (window.inquiryNotifications) {
+                await window.inquiryNotifications.checkUnreadInquiries();
+              }
+            } else {
+              alert('Notification permission denied. Please enable notifications in your browser settings.');
+            }
+          } catch (error) {
+            alert('Error requesting notification permission: ' + error.message);
+          }
+        });
+      } else {
+        permissionButton.classList.add('hidden');
+      }
+    }
+  });
+
+  document.getElementById('store-info-form').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const formData = new FormData(this);
+    const messageDiv = document.getElementById('store-info-message');
+    messageDiv.innerHTML = '<span class="text-gray-400">Saving...</span>';
+    try {
+      const data = Object.fromEntries(formData);
+      const socials = [];
+      if (data.social_facebook)  socials.push({ icon: 'facebook',  url: data.social_facebook  });
+      if (data.social_instagram) socials.push({ icon: 'instagram', url: data.social_instagram });
+      if (data.social_twitter)   socials.push({ icon: 'twitter',   url: data.social_twitter   });
+      data.socials = socials;
+      delete data.social_facebook;
+      delete data.social_instagram;
+      delete data.social_twitter;
+      delete data.slug_id;
+      // Checkboxes are absent from FormData when unchecked — send an explicit boolean.
+      data.notify_enabled = this.notify_enabled.checked;
+      await apiJson('/api/stores/' + STORE_ID, {
+        method: 'PATCH',
+        body: JSON.stringify(data)
+      });
+      messageDiv.innerHTML = '<span class="text-green-400">✓ Saved!</span>';
+      setTimeout(() => { messageDiv.innerHTML = ''; }, 3000);
+    } catch (error) {
+      messageDiv.innerHTML = '<span class="text-red-400">✗ Error: ' + error.message + '</span>';
+    }
+  });
+  {% endraw %}
+</script>
+
+<script>
+  /* Appearance panel — presets, color/font/radius pickers, live preview.
+     All fields save through the existing store-info-form PATCH. */
+  (function () {
+    var presets = window.STORE_THEME_PRESETS || [];
+    var fonts = window.STORE_FONT_CATALOG || {};
+    var buildFontsGoogle = window.storeFontsGoogle;
+    var hexToChannels = window.storeHexToChannels || function (h) { return h; };
+    var bestTextOn = window.storeBestTextOn || function () { return '#ffffff'; };
+    var contrastRatio = window.storeContrastRatio || function () { return 21; };
+    var paletteFrom = window.storePaletteFrom;
+    var adjustForContrast = window.storeAdjustForContrast || function (c) { return c; };
+    var normalizeHex = window.storeNormalizeHex || function (v) { return /^#[0-9a-fA-F]{6}$/.test(v) ? v.toLowerCase() : null; };
+    var COLOR_KEYS = ['theme_primary', 'theme_secondary', 'theme_background', 'theme_surface', 'theme_text', 'theme_text_secondary'];
+    var VAR_MAP = {
+      theme_primary: '--store-theme-primary',
+      theme_secondary: '--store-theme-secondary',
+      theme_background: '--store-theme-background',
+      theme_surface: '--store-theme-surface',
+      theme_text: '--store-theme-text',
+      theme_text_secondary: '--store-theme-text-secondary'
+    };
+    var $ = function (id) { return document.getElementById(id); };
+    var preview = $('ap-preview');
+    if (!preview) return;
+
+    var fontLink;
+    function ensureFonts(g) {
+      if (!g) return;
+      var href = 'https://fonts.googleapis.com/css2?family=' + g + '&display=swap';
+      if (!fontLink) {
+        fontLink = document.createElement('link');
+        fontLink.rel = 'stylesheet';
+        fontLink.setAttribute('data-ap-fonts', '1');
+        document.head.appendChild(fontLink);
+      }
+      if (fontLink.href !== href) fontLink.href = href;
+    }
+
+    function keyByFamily(fam) {
+      return Object.keys(fonts).filter(function (k) { return fonts[k].family === fam; })[0] || '';
+    }
+
+    function remToPx(v) {
+      if (!v) return 12;
+      if (String(v).indexOf('rem') >= 0) return Math.round(parseFloat(v) * 16);
+      return Math.round(parseFloat(v) || 0);
+    }
+
+    // Live preview only re-skins the preview element (dashboard chrome stays put).
+    // Colors are written as RGB *channels* so the store-* Tailwind utilities
+    // in the preview markup resolve via rgb(var(--x) / <alpha>).
+    function applyLive() {
+      COLOR_KEYS.forEach(function (k) { preview.style.setProperty(VAR_MAP[k], hexToChannels($('ap_' + k).value)); });
+      preview.style.setProperty('--store-on-primary', hexToChannels($('ap_theme_on_primary').value));
+      preview.style.setProperty('--store-on-secondary', hexToChannels($('ap_theme_on_secondary').value));
+      preview.style.setProperty('--store-font-heading', $('ap_font_heading').value);
+      preview.style.setProperty('--store-font-body', $('ap_font_body').value);
+      preview.style.setProperty('--store-radius', $('ap_theme_radius').value);
+      preview.style.setProperty('--store-heading-transform', $('ap_heading_transform').value);
+      preview.style.setProperty('--store-heading-spacing', $('ap_heading_spacing').value);
+      preview.style.fontFamily = $('ap_font_body').value;
+      ensureFonts($('ap_fonts_google').value);
+      updateContrast();
+    }
+
+    // Keep button label colors legible whenever the base colors change.
+    function recomputeOnColors() {
+      $('ap_theme_on_primary').value = bestTextOn($('ap_theme_primary').value);
+      $('ap_theme_on_secondary').value = bestTextOn($('ap_theme_secondary').value);
+    }
+
+    // WCAG contrast guardrails — warn (but don't block) below 4.5:1, with a
+    // one-click Auto-fix that nudges the offending color to reach AA.
+    function ensureWarn(fieldId) {
+      var id = 'warn_' + fieldId;
+      var el = document.getElementById(id);
+      if (!el) {
+        el = document.createElement('p');
+        el.id = id;
+        el.className = 'mt-1 text-xs text-amber-400 hidden items-center gap-2 flex-wrap';
+        el.setAttribute('role', 'status');
+        el.setAttribute('aria-live', 'polite');
+        var span = document.createElement('span');
+        span.className = 'warn-text';
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'warn-fix underline font-semibold hover:text-amber-300';
+        btn.textContent = 'Auto-fix';
+        el.appendChild(span);
+        el.appendChild(btn);
+        var field = $(fieldId);
+        var wrap = field && field.parentElement ? field.parentElement.parentElement : null;
+        if (wrap) wrap.appendChild(el);
+        else if (field) field.insertAdjacentElement('afterend', el);
+      }
+      return el;
+    }
+    function setWarn(fieldId, ratio, what, fixKind, threshold) {
+      threshold = threshold || 4.5;
+      var el = ensureWarn(fieldId);
+      if (ratio < threshold) {
+        el.querySelector('.warn-text').textContent = 'Low contrast ' + ratio.toFixed(1) + ':1 — ' + what;
+        el.querySelector('.warn-fix').onclick = function () { autoFix(fixKind); };
+        el.classList.remove('hidden');
+        el.classList.add('flex');
+      } else {
+        el.classList.add('hidden');
+        el.classList.remove('flex');
+      }
+    }
+    // Nudge the offending color to clear its target, then re-render. Falls back
+    // to a guaranteed-legible extreme so the clicked warning always resolves.
+    function autoFix(kind) {
+      if (kind === 'primary' || kind === 'secondary') {
+        var ck = kind === 'primary' ? 'theme_primary' : 'theme_secondary';
+        var cur = $('ap_' + ck).value;
+        var fixed = adjustForContrast(cur, bestTextOn(cur), 4.5);
+        // If lightness/saturation nudging still can't seat a legible label,
+        // the on-color (recomputed below) will flip; that pairing always passes.
+        setColor(ck, fixed);
+        recomputeOnColors();
+      } else if (kind === 'muted') {
+        var m = adjustForContrast($('ap_theme_text_secondary').value, $('ap_theme_background').value, 3.0);
+        m = adjustForContrast(m, $('ap_theme_surface').value, 3.0);
+        setColor('theme_text_secondary', m);
+      } else {
+        var t = adjustForContrast($('ap_theme_text').value, $('ap_theme_background').value, 4.5);
+        t = adjustForContrast(t, $('ap_theme_surface').value, 4.5);
+        // Last resort: if a saturated text hue still can't hit AA on both
+        // surfaces, snap to the legible extreme for the darker surface.
+        var darker = contrastRatio('#000000', $('ap_theme_background').value) <= contrastRatio('#000000', $('ap_theme_surface').value)
+          ? $('ap_theme_background').value : $('ap_theme_surface').value;
+        if (contrastRatio(t, $('ap_theme_background').value) < 4.5 || contrastRatio(t, $('ap_theme_surface').value) < 4.5) {
+          t = bestTextOn(darker);
+        }
+        setColor('theme_text', t);
+      }
+      markCustom();
+      applyLive();
+    }
+    function updateContrast() {
+      var text = $('ap_theme_text').value;
+      var bg = $('ap_theme_background').value;
+      var surf = $('ap_theme_surface').value;
+      var prim = $('ap_theme_primary').value;
+      var onPrim = $('ap_theme_on_primary').value;
+      var muted = $('ap_theme_text_secondary').value;
+      var sec = $('ap_theme_secondary').value;
+      var onSec = $('ap_theme_on_secondary').value;
+      setWarn('ap_theme_background', contrastRatio(text, bg), 'text on background', 'text', 4.5);
+      setWarn('ap_theme_surface', contrastRatio(text, surf), 'text on surface (cards)', 'text', 4.5);
+      setWarn('ap_theme_primary', contrastRatio(onPrim, prim), 'button label on primary', 'primary', 4.5);
+      setWarn('ap_theme_secondary', contrastRatio(onSec, sec), 'button label on accent', 'secondary', 4.5);
+      setWarn('ap_theme_text_secondary', Math.min(contrastRatio(muted, bg), contrastRatio(muted, surf)), 'secondary text', 'muted', 3.0);
+    }
+
+    function setColor(k, val) {
+      $('ap_' + k).value = val;
+      var hex = document.querySelector('[data-hex-for="ap_' + k + '"]');
+      if (hex) hex.value = val;
+    }
+
+    function markSelected(key) {
+      Array.prototype.forEach.call(document.querySelectorAll('.ap-preset'), function (el) {
+        var on = el.getAttribute('data-key') === key;
+        el.classList.toggle('ring-2', on);
+        el.classList.toggle('ring-blue-500', on);
+        el.classList.toggle('border-blue-500', on);
+      });
+    }
+
+    function markCustom() {
+      $('ap_style_preset').value = 'custom';
+      markSelected('custom');
+    }
+
+    function applyPreset(p) {
+      var f = p.fields;
+      COLOR_KEYS.forEach(function (k) { setColor(k, f[k]); });
+      $('ap_theme_on_primary').value = f.theme_on_primary || bestTextOn(f.theme_primary);
+      $('ap_theme_on_secondary').value = f.theme_on_secondary || bestTextOn(f.theme_secondary);
+      $('ap_style_preset').value = f.style_preset;
+      $('ap_font_heading').value = f.font_heading;
+      $('ap_font_body').value = f.font_body;
+      $('ap_fonts_google').value = f.fonts_google;
+      $('ap_theme_radius').value = f.theme_radius;
+      $('ap_heading_transform').value = f.heading_transform;
+      $('ap_heading_spacing').value = f.heading_spacing;
+      $('ap_font_heading_select').value = keyByFamily(f.font_heading);
+      $('ap_font_body_select').value = keyByFamily(f.font_body);
+      $('ap_radius_range').value = remToPx(f.theme_radius);
+      $('ap_radius_val').textContent = remToPx(f.theme_radius) + 'px';
+      applyLive();
+    }
+
+    function swatch(c) {
+      return '<span style="display:inline-block;width:20px;height:20px;border-radius:4px;background:' +
+        c + ';border:1px solid rgba(255,255,255,.18)"></span>';
+    }
+
+    // Build the preset gallery.
+    var gallery = $('ap-preset-gallery');
+    presets.forEach(function (p) {
+      var f = p.fields;
+      var card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'ap-preset text-left rounded-lg border border-gray-600 p-3 hover:border-blue-500 transition-colors';
+      card.setAttribute('data-key', p.key);
+      card.innerHTML =
+        '<div class="flex gap-1 mb-2">' +
+          swatch(f.theme_primary) + swatch(f.theme_secondary) + swatch(f.theme_background) + swatch(f.theme_surface) +
+        '</div>' +
+        '<div class="font-bold text-sm">' + p.label + '</div>' +
+        '<div class="text-xs text-gray-500 leading-snug">' + p.description + '</div>';
+      card.addEventListener('click', function () { applyPreset(p); markSelected(p.key); });
+      gallery.appendChild(card);
+    });
+
+    // Populate font selects.
+    ['ap_font_heading_select', 'ap_font_body_select'].forEach(function (id) {
+      var sel = $(id);
+      Object.keys(fonts).forEach(function (k) {
+        var o = document.createElement('option');
+        o.value = k;
+        o.textContent = fonts[k].label;
+        sel.appendChild(o);
+      });
+    });
+
+    // Wire controls.
+    COLOR_KEYS.forEach(function (k) {
+      var color = $('ap_' + k);
+      var hex = document.querySelector('[data-hex-for="ap_' + k + '"]');
+      color.addEventListener('input', function () { if (hex) { hex.value = color.value; hex.classList.remove('ring-2', 'ring-red-500'); } recomputeOnColors(); markCustom(); applyLive(); });
+      if (hex) {
+        hex.addEventListener('input', function () {
+          var v = normalizeHex(hex.value);
+          if (v) { hex.classList.remove('ring-2', 'ring-red-500'); color.value = v; recomputeOnColors(); markCustom(); applyLive(); }
+          else { hex.classList.add('ring-2', 'ring-red-500'); }
+        });
+        hex.addEventListener('blur', function () { hex.value = color.value; hex.classList.remove('ring-2', 'ring-red-500'); });
+      }
+    });
+
+    function onFontChange() {
+      var hk = $('ap_font_heading_select').value;
+      var bk = $('ap_font_body_select').value;
+      if (fonts[hk]) $('ap_font_heading').value = fonts[hk].family;
+      if (fonts[bk]) $('ap_font_body').value = fonts[bk].family;
+      $('ap_fonts_google').value = buildFontsGoogle ? buildFontsGoogle(hk, bk)
+        : (fonts[hk].google + (hk === bk ? '' : '&family=' + fonts[bk].google));
+      markCustom();
+      applyLive();
+    }
+    $('ap_font_heading_select').addEventListener('change', onFontChange);
+    $('ap_font_body_select').addEventListener('change', onFontChange);
+
+    $('ap_radius_range').addEventListener('input', function () {
+      var px = parseInt(this.value, 10) || 0;
+      $('ap_theme_radius').value = px + 'px';
+      $('ap_radius_val').textContent = px + 'px';
+      markCustom();
+      applyLive();
+    });
+
+    // Tabs: Simple / Advanced (both share the same form + preview).
+    var panelSimple = $('ap-panel-simple');
+    var panelAdvanced = $('ap-panel-advanced');
+    function setTab(which, focusTab) {
+      var simple = which !== 'advanced';
+      panelSimple.classList.toggle('hidden', !simple);
+      panelAdvanced.classList.toggle('hidden', simple);
+      [['ap-tab-simple', simple], ['ap-tab-advanced', !simple]].forEach(function (pair) {
+        var t = $(pair[0]);
+        t.setAttribute('aria-selected', pair[1] ? 'true' : 'false');
+        t.tabIndex = pair[1] ? 0 : -1;
+        t.classList.toggle('bg-blue-600', pair[1]);
+        t.classList.toggle('text-white', pair[1]);
+        t.classList.toggle('text-gray-400', !pair[1]);
+      });
+      if (focusTab) $(simple ? 'ap-tab-simple' : 'ap-tab-advanced').focus();
+    }
+    $('ap-tab-simple').addEventListener('click', function () { setTab('simple'); });
+    $('ap-tab-advanced').addEventListener('click', function () { setTab('advanced'); });
+    $('ap-tablist').addEventListener('keydown', function (e) {
+      var k = e.key;
+      if (k === 'ArrowRight' || k === 'ArrowDown' || k === 'End') { setTab('advanced', true); e.preventDefault(); }
+      else if (k === 'ArrowLeft' || k === 'ArrowUp' || k === 'Home') { setTab('simple', true); e.preventDefault(); }
+    });
+    setTab('simple');
+
+    // Brand-color palette generator (Simple tab).
+    var brandColor = $('ap_brand_color');
+    var brandHex = $('ap_brand_color_hex');
+    var brandMode = 'dark';
+    function setMode(m) {
+      brandMode = m === 'light' ? 'light' : 'dark';
+      Array.prototype.forEach.call(document.querySelectorAll('.ap-mode'), function (b) {
+        var on = b.getAttribute('data-mode') === brandMode;
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+        b.classList.toggle('bg-blue-600', on);
+        b.classList.toggle('text-white', on);
+        b.classList.toggle('text-gray-400', !on);
+      });
+    }
+    Array.prototype.forEach.call(document.querySelectorAll('.ap-mode'), function (b) {
+      b.addEventListener('click', function () { setMode(b.getAttribute('data-mode')); });
+    });
+    setMode('dark');
+    brandColor.addEventListener('input', function () { brandHex.value = brandColor.value; brandHex.classList.remove('ring-2', 'ring-red-500'); });
+    brandHex.addEventListener('input', function () {
+      var v = normalizeHex(brandHex.value);
+      if (v) { brandColor.value = v; brandHex.classList.remove('ring-2', 'ring-red-500'); }
+      else { brandHex.classList.add('ring-2', 'ring-red-500'); }
+    });
+    brandHex.addEventListener('blur', function () { brandHex.value = brandColor.value; brandHex.classList.remove('ring-2', 'ring-red-500'); });
+    $('ap-generate').addEventListener('click', function () {
+      if (!paletteFrom) return;
+      var pal = paletteFrom(brandColor.value, brandMode);
+      COLOR_KEYS.forEach(function (k) { setColor(k, pal[k]); });
+      $('ap_theme_on_primary').value = pal.theme_on_primary;
+      $('ap_theme_on_secondary').value = pal.theme_on_secondary;
+      markCustom();
+      applyLive();
+      var msg = $('store-info-message');
+      if (msg) {
+        msg.innerHTML = '<span class="text-green-400"><i class="fas fa-circle-check mr-1"></i>Palette generated — all colors pass AA contrast.</span>';
+        setTimeout(function () { if (msg.textContent.indexOf('Palette generated') >= 0) msg.innerHTML = ''; }, 4000);
+      }
+    });
+
+    // Reset to saved: snapshot the server-rendered values, restore on demand.
+    var SAVED = {};
+    ['theme_primary', 'theme_secondary', 'theme_background', 'theme_surface', 'theme_text', 'theme_text_secondary',
+     'theme_on_primary', 'theme_on_secondary', 'font_heading', 'font_body', 'fonts_google',
+     'theme_radius', 'heading_transform', 'heading_spacing', 'style_preset'].forEach(function (k) {
+      SAVED[k] = $('ap_' + k).value;
+    });
+    $('ap-reset').addEventListener('click', function () {
+      COLOR_KEYS.forEach(function (k) { setColor(k, SAVED[k]); });
+      ['theme_on_primary', 'theme_on_secondary', 'font_heading', 'font_body', 'fonts_google',
+       'theme_radius', 'heading_transform', 'heading_spacing', 'style_preset'].forEach(function (k) {
+        $('ap_' + k).value = SAVED[k];
+      });
+      $('ap_font_heading_select').value = keyByFamily(SAVED.font_heading);
+      $('ap_font_body_select').value = keyByFamily(SAVED.font_body);
+      $('ap_radius_range').value = remToPx(SAVED.theme_radius);
+      $('ap_radius_val').textContent = remToPx(SAVED.theme_radius) + 'px';
+      brandColor.value = SAVED.theme_primary;
+      brandHex.value = SAVED.theme_primary;
+      brandHex.classList.remove('ring-2', 'ring-red-500');
+      setMode('dark');
+      markSelected(SAVED.style_preset);
+      applyLive();
+    });
+
+    // Initialize from current store values.
+    $('ap_font_heading_select').value = keyByFamily($('ap_font_heading').value);
+    $('ap_font_body_select').value = keyByFamily($('ap_font_body').value);
+    $('ap_radius_range').value = remToPx($('ap_theme_radius').value);
+    $('ap_radius_val').textContent = remToPx($('ap_theme_radius').value) + 'px';
+    markSelected($('ap_style_preset').value);
+    applyLive();
+  })();
+</script>
+{% endblock %}

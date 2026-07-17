@@ -1,0 +1,108 @@
+{# Shared public/admin header.
+   Navigation is data-driven: on the home page it is built from the visible
+   `layout` sections that define a `nav_label`. Pass `nav_mode` to customise:
+     - "public" (default): Home + section links (from `layout`) + CTA
+     - "detail":  Back to Store + Catalog + CTA (item / contact pages)
+     - "admin":   admin console links
+   Pass `show_admin_cta` falsy to hide the login/dashboard buttons.
+   Store-configurable call-to-action via `store.cta_label` / `store.cta_href`.
+#}
+{% set _nav_mode = nav_mode or 'public' %}
+{% set _show_admin_cta = True if show_admin_cta is not defined else show_admin_cta %}
+{% set _cta_label = store.cta_label or 'Contact' %}
+{% set _cta_raw   = store.cta_href or '/contact' %}
+{# Prefix root-relative CTA links with the store base path; leave absolute URLs. #}
+{% set _cta_href  = (base_path ~ _cta_raw) if _cta_raw.startswith('/') else _cta_raw %}
+{% set _sections  = (layout if layout is defined and layout else []) %}
+<header id="top" class="store-header shadow-lg sticky top-0 z-50 bg-store-surface border-b-2 border-store-primary">
+  <div class="container mx-auto px-3 sm:px-6 py-2 sm:py-3 flex justify-between items-center">
+    <a href="{{ base_path }}/" class="flex items-center gap-2 sm:space-x-3 group min-w-0">
+      <img src="{{ store.logo_url or '/static/img/logo.png' }}"
+           alt="{{ store.name }} logo"
+           class="store-logo h-10 w-10 sm:h-16 sm:w-16 md:h-20 md:w-20 rounded-full object-cover flex-shrink-0 transition-transform duration-300 group-hover:scale-105">
+      <span class="text-store-text text-base sm:text-xl md:text-2xl font-bold truncate">{{ store.name or 'AI Stores' }}</span>
+    </a>
+
+    {# Desktop Navigation #}
+    <nav class="desktop-nav flex items-center space-x-6" aria-label="Primary">
+      {% if _nav_mode == 'public' %}
+        <a href="#top" class="nav-link text-store-text transition hover:text-store-primary">Home</a>
+        {% for s in _sections %}
+          {% if s.nav_label %}
+          <a href="#{{ s.anchor or s.key }}" class="nav-link text-store-text transition hover:text-store-primary">{{ s.nav_label }}</a>
+          {% endif %}
+        {% endfor %}
+        <a href="{{ _cta_href }}" data-magnetic="0.25"
+           class="btn-glow bg-store-primary text-store-onprimary rounded-store transition hover:brightness-110 active:translate-y-px inline-flex items-center gap-2 px-4 py-2 font-bold shadow-md">
+          <i class="fas fa-paper-plane text-sm"></i>
+          {{ _cta_label }}
+        </a>
+      {% elif _nav_mode == 'detail' %}
+        <a href="{{ base_path }}/" class="nav-link text-store-text transition hover:text-store-primary">Back to Store</a>
+        <a href="{{ base_path }}/#catalog" class="nav-link text-store-text transition hover:text-store-primary">Catalog</a>
+        <a href="{{ _cta_href }}" data-magnetic="0.25"
+           class="btn-glow bg-store-primary text-store-onprimary rounded-store transition hover:brightness-110 active:translate-y-px inline-flex items-center gap-2 px-4 py-2 font-bold shadow-md">
+          <i class="fas fa-paper-plane text-sm"></i>
+          {{ _cta_label }}
+        </a>
+      {% elif _nav_mode == 'admin' %}
+        <a href="{{ base_path }}/admin/dashboard" class="nav-link text-store-text transition hover:text-store-primary">Dashboard</a>
+        <a href="{{ base_path }}/admin/layout" class="nav-link text-store-text transition hover:text-store-primary">Layout</a>
+        <a href="{{ base_path }}/admin/items" class="nav-link text-store-text transition hover:text-store-primary">Items</a>
+        <a href="{{ base_path }}/admin/slideshow" class="nav-link text-store-text transition hover:text-store-primary">Slideshow</a>
+        <a href="{{ base_path }}/admin/specials" class="nav-link text-store-text transition hover:text-store-primary">Specials</a>
+        <a href="{{ base_path }}/admin/inquiries" class="nav-link text-store-text transition hover:text-store-primary">Inquiries</a>
+        <a href="{{ base_path }}/" class="nav-link text-store-text transition hover:text-store-primary">View Store</a>
+      {% endif %}
+
+      {% if _show_admin_cta %}
+      <div class="flex items-center space-x-3">
+        {% if user %}
+          {% if _nav_mode != 'admin' %}
+          <a href="{{ base_path }}/admin/dashboard" class="bg-store-text/10 text-store-text border border-store-text/30 rounded-store transition hover:bg-store-text/20 px-4 py-2">Dashboard</a>
+          {% endif %}
+          <button type="button" data-logout class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md transition-colors">Logout</button>
+        {% else %}
+          <a href="{{ base_path }}/admin/login" class="bg-store-text/10 text-store-text border border-store-text/30 rounded-store transition hover:bg-store-text/20 px-4 py-2">Login</a>
+        {% endif %}
+      </div>
+      {% endif %}
+    </nav>
+
+    {# Mobile toggle #}
+    <button id="mobile-menu-toggle" aria-label="Toggle mobile menu" aria-controls="mobile-menu" aria-expanded="false">
+      <span></span><span></span><span></span>
+    </button>
+  </div>
+
+  {# Mobile Navigation #}
+  <nav id="mobile-menu" aria-label="Mobile Primary">
+    {% if _nav_mode == 'public' %}
+      <a href="#top" class="nav-link">Home</a>
+      {% for s in _sections %}
+        {% if s.nav_label %}<a href="#{{ s.anchor or s.key }}" class="nav-link">{{ s.nav_label }}</a>{% endif %}
+      {% endfor %}
+      <a href="{{ _cta_href }}" class="nav-link text-store-primary font-bold">{{ _cta_label }}</a>
+    {% elif _nav_mode == 'detail' %}
+      <a href="{{ base_path }}/" class="nav-link">Back to Store</a>
+      <a href="{{ base_path }}/#catalog" class="nav-link">Catalog</a>
+      <a href="{{ _cta_href }}" class="nav-link text-store-primary font-bold">{{ _cta_label }}</a>
+    {% elif _nav_mode == 'admin' %}
+      <a href="{{ base_path }}/admin/dashboard" class="nav-link">Dashboard</a>
+      <a href="{{ base_path }}/admin/layout" class="nav-link">Layout</a>
+      <a href="{{ base_path }}/admin/items" class="nav-link">Items</a>
+      <a href="{{ base_path }}/admin/slideshow" class="nav-link">Slideshow</a>
+      <a href="{{ base_path }}/admin/specials" class="nav-link">Specials</a>
+      <a href="{{ base_path }}/admin/inquiries" class="nav-link">Inquiries</a>
+      <a href="{{ base_path }}/" class="nav-link">View Store</a>
+    {% endif %}
+    {% if _show_admin_cta %}
+      {% if user %}
+        {% if _nav_mode != 'admin' %}<a href="{{ base_path }}/admin/dashboard" class="nav-link">Dashboard</a>{% endif %}
+        <button type="button" data-logout class="nav-link w-full text-left">Logout</button>
+      {% else %}
+        <a href="{{ base_path }}/admin/login" class="nav-link">Login</a>
+      {% endif %}
+    {% endif %}
+  </nav>
+</header>

@@ -1,0 +1,153 @@
+{% extends "_base.html" %}
+
+{%- set store = (store[0] if store is sequence and not store is mapping and store else store) or {} -%}
+{% set seo_title       = 'Contact — ' ~ (store.name or 'AI Stores') %}
+{% set seo_description = 'Get in touch with ' ~ (store.name or 'us') ~ '. Send a message and we will reply shortly.' %}
+{% set nav_mode        = 'detail' %}
+{% set robots          = 'index,follow' %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-10 sm:py-16 max-w-3xl">
+  <div class="text-center mb-8 sm:mb-10">
+    <h1 class="reveal text-store-text text-3xl sm:text-4xl md:text-5xl font-extrabold">Get in Touch</h1>
+    <p class="reveal text-store-muted mt-3 text-base sm:text-lg" data-reveal-delay="1">
+      Have a question or a request? Send us a message and we'll get back to you.
+    </p>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <div class="md:col-span-1 space-y-4 reveal">
+      {% if store.phone %}
+      <div class="bg-store-surface border border-store-text/10 rounded-xl p-4">
+        <p class="text-xs uppercase tracking-wide text-store-muted mb-1"><i class="fas fa-phone mr-2 text-store-primary"></i>Call</p>
+        <a href="tel:{{ store.phone }}" class="font-bold text-store-primary hover:underline">{{ store.phone_display or store.phone }}</a>
+      </div>
+      {% endif %}
+      {% if store.email %}
+      <div class="bg-store-surface border border-store-text/10 rounded-xl p-4">
+        <p class="text-xs uppercase tracking-wide text-store-muted mb-1"><i class="fas fa-envelope mr-2 text-store-primary"></i>Email</p>
+        <a href="mailto:{{ store.email }}" class="font-bold text-store-primary hover:underline break-all">{{ store.email }}</a>
+      </div>
+      {% endif %}
+      {% if store.address %}
+      <div class="bg-store-surface border border-store-text/10 rounded-xl p-4">
+        <p class="text-xs uppercase tracking-wide text-store-muted mb-1"><i class="fas fa-map-marker-alt mr-2 text-store-primary"></i>Visit</p>
+        <p class="text-store-text">{{ store.address }}</p>
+      </div>
+      {% endif %}
+      {% if store.hours %}
+      <div class="bg-store-surface border border-store-text/10 rounded-xl p-4">
+        <p class="text-xs uppercase tracking-wide text-store-muted mb-1"><i class="fas fa-clock mr-2 text-store-primary"></i>Hours</p>
+        <p class="text-store-text whitespace-pre-line">{{ store.hours }}</p>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="md:col-span-2 reveal" data-reveal-delay="1">
+      <form id="contact-form" class="bg-store-surface border border-store-text/10 p-5 sm:p-8 rounded-xl shadow-xl space-y-4">
+        <div>
+          <label for="subject" class="block text-sm font-medium text-store-muted mb-1">What is this about?</label>
+          <select id="subject" name="subject"
+                  class="bg-store-bg text-store-text border border-store-text/20 rounded-store placeholder:text-store-text/40 focus:outline-none focus:ring-2 focus:ring-store-primary/40 focus:border-store-primary mt-1 block w-full px-3 py-2">
+            <option value="general" data-name="General inquiry" data-category="">General inquiry</option>
+            {% for item in items %}
+            <option value="{{ item._id }}" data-name="{{ item.name }}" data-category="{{ item.category or '' }}">{{ item.name }}{% if item.category %} · {{ item.category }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label for="customer_name" class="block text-sm font-medium text-store-muted mb-1">Your name</label>
+            <input type="text" id="customer_name" name="customer_name" required autocomplete="name"
+                   class="bg-store-bg text-store-text border border-store-text/20 rounded-store placeholder:text-store-text/40 focus:outline-none focus:ring-2 focus:ring-store-primary/40 focus:border-store-primary mt-1 block w-full px-3 py-2">
+          </div>
+          <div>
+            <label for="customer_contact" class="block text-sm font-medium text-store-muted mb-1">Phone or email</label>
+            <input type="text" id="customer_contact" name="customer_contact" required autocomplete="email"
+                   class="bg-store-bg text-store-text border border-store-text/20 rounded-store placeholder:text-store-text/40 focus:outline-none focus:ring-2 focus:ring-store-primary/40 focus:border-store-primary mt-1 block w-full px-3 py-2">
+          </div>
+        </div>
+        <div>
+          <label for="preferred_date" class="block text-sm font-medium text-store-muted mb-1">Preferred date/time <span class="text-store-muted">(optional)</span></label>
+          <input type="text" id="preferred_date" name="preferred_date" placeholder="e.g. next Tuesday afternoon"
+                 class="bg-store-bg text-store-text border border-store-text/20 rounded-store placeholder:text-store-text/40 focus:outline-none focus:ring-2 focus:ring-store-primary/40 focus:border-store-primary mt-1 block w-full px-3 py-2">
+        </div>
+        <div>
+          <label for="message" class="block text-sm font-medium text-store-muted mb-1">Message</label>
+          <textarea id="message" name="message" rows="4"
+                    class="bg-store-bg text-store-text border border-store-text/20 rounded-store placeholder:text-store-text/40 focus:outline-none focus:ring-2 focus:ring-store-primary/40 focus:border-store-primary mt-1 block w-full px-3 py-2"></textarea>
+        </div>
+        {# Honeypot — hidden from humans; bots that fill it are dropped server-side. #}
+        <div aria-hidden="true" style="position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden">
+          <label>Company website<input type="text" name="company_website" tabindex="-1" autocomplete="off"></label>
+        </div>
+        <button type="submit" id="contact-submit"
+                class="store-btn bg-store-primary text-store-onprimary rounded-store transition hover:brightness-110 active:translate-y-px inline-flex items-center justify-center gap-2 w-full font-bold py-3 px-4">
+          <i class="fas fa-paper-plane"></i>
+          <span data-label>Send message</span>
+        </button>
+        <p id="contact-status" class="text-sm text-center hidden"></p>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div id="store-toast" class="store-toast" role="status" aria-live="polite"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    var form = document.getElementById('contact-form');
+    if (!form) return;
+    var toast = document.getElementById('store-toast');
+    var btn = document.getElementById('contact-submit');
+    var label = btn.querySelector('[data-label]');
+
+    function showToast(msg, ok) {
+      toast.textContent = msg;
+      toast.classList.toggle('is-ok', !!ok);
+      toast.classList.toggle('is-err', !ok);
+      toast.classList.add('is-show');
+      setTimeout(function () { toast.classList.remove('is-show'); }, 4200);
+    }
+
+    form.addEventListener('submit', async function (ev) {
+      ev.preventDefault();
+      btn.setAttribute('aria-busy', 'true');
+      label.textContent = 'Sending…';
+      var opt = form.subject.options[form.subject.selectedIndex];
+      try {
+        var res = await fetch((window.BASE_PATH || '') + '/api/submit-inquiry', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            item_id: form.subject.value || 'general',
+            item_name: (opt && opt.dataset.name) || 'General inquiry',
+            service_category: (opt && opt.dataset.category) || '',
+            customer_name: form.customer_name.value.trim(),
+            customer_contact: form.customer_contact.value.trim(),
+            preferred_date: form.preferred_date.value.trim(),
+            message: form.message.value.trim(),
+            company_website: (form.company_website && form.company_website.value) || ''
+          })
+        });
+        if (!res.ok) {
+          var body = await res.json().catch(function () { return {}; });
+          var d = body.detail;
+          throw new Error(typeof d === 'string' ? d : 'Something went wrong');
+        }
+        if (typeof gtag === 'function') gtag('event', 'generate_lead', { form: 'contact' });
+        if (typeof fbq === 'function') fbq('track', 'Lead');
+        var payload = await res.json().catch(function () { return {}; });
+        window.location.href = (payload && payload.redirect) || ((window.BASE_PATH || '') + '/contact/thanks');
+      } catch (err) {
+        showToast(String((err && err.message) || err), false);
+        btn.removeAttribute('aria-busy');
+        label.textContent = 'Send message';
+      }
+    });
+  })();
+</script>
+{% endblock %}

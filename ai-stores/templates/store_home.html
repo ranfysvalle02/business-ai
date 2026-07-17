@@ -1,0 +1,35 @@
+{% extends "_base.html" %}
+
+{# ── Home page ──────────────────────────────────────────────────────────
+   The layout is DATA-DRIVEN. `layout` is a list of visible `sections`
+   (sorted by `order`) loaded by the SSR `/` route. We simply loop over it
+   and include the matching partial: _partials/sections/{{ section.type }}.html
+   Admins reorder / toggle / configure these from /admin/layout — no code
+   change needed. A hardcoded fallback keeps the page useful before the
+   default layout has been seeded.
+   ───────────────────────────────────────────────────────────────────── #}
+{% set seo_title       = store.name ~ (' — ' ~ store.tagline if store.tagline else '') %}
+{% set seo_description = store.about_text or store.tagline %}
+{% set seo_og_image    = (slideshow[0].image_url if slideshow and slideshow|length > 0 else store.hero_image_url) %}
+{% set jsonld_type     = 'home' %}
+{% set nav_mode        = 'public' %}
+
+{% set _default_layout = [
+  {'type': 'hero',     'anchor': 'hero',     'settings': {'show_cta': true}},
+  {'type': 'catalog',  'anchor': 'catalog',  'settings': {'heading': 'Our Catalog', 'columns': 3}},
+  {'type': 'specials', 'anchor': 'specials', 'settings': {'heading': 'Specials & Announcements'}},
+  {'type': 'contact',  'anchor': 'contact',  'settings': {'heading': 'Visit Us', 'show_form': true, 'show_map': true}}
+] %}
+{% set _layout = layout if (layout is defined and layout) else _default_layout %}
+
+{% block content %}
+  {% for section in _layout %}
+    {% include "_partials/sections/" ~ section.type ~ ".html" ignore missing %}
+  {% endfor %}
+{% endblock %}
+
+{% block scripts %}
+  {% if slideshow and slideshow|length > 0 %}
+  <script defer src="/static/js/slideshow.js"></script>
+  {% endif %}
+{% endblock %}

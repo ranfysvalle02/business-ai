@@ -1,0 +1,98 @@
+{% extends "_base.html" %}
+
+{%- set store = (store[0] if store is sequence and not store is mapping and store else store) or {} -%}
+{% set seo_title = 'Admin Login — ' ~ (store.name or 'AI Stores') %}
+{% set robots    = 'noindex,nofollow' %}
+{% set show_admin_cta = False %}
+
+{% block header %}{% endblock %}
+{% block footer %}{% endblock %}
+
+{% block content %}
+<div class="min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden"
+     style="background: linear-gradient(135deg, rgb(var(--store-theme-background)) 0%, rgb(var(--store-theme-surface)) 100%);">
+  <div class="fx-aurora" aria-hidden="true"></div>
+  <div class="max-w-md w-full space-y-8 reveal relative z-10">
+    <div class="text-center">
+      <a href="{{ base_path }}/" class="inline-block mb-4 group">
+        <img src="{{ store.logo_url or '/static/img/logo.png' }}"
+             alt="{{ store.name }} logo"
+             class="store-logo h-20 w-20 rounded-full object-cover mx-auto shadow-lg">
+      </a>
+      <h2 class="text-3xl font-extrabold text-white">Admin Login</h2>
+      <p class="mt-2 text-sm text-gray-400">{{ store.name or 'AI Stores' }}</p>
+    </div>
+
+    <div id="login-error" class="hidden bg-red-900/70 border border-red-700 text-red-200 px-4 py-3 rounded" role="alert">
+      <span id="login-error-msg"></span>
+    </div>
+
+    <form id="login-form" class="mt-6 bg-gray-800 border border-gray-700 p-6 rounded-xl shadow-xl space-y-4">
+      <div>
+        <label for="email" class="block text-sm font-medium text-gray-300 mb-1">Email address</label>
+        <input id="email" name="email" type="email" required autocomplete="email"
+               class="appearance-none block w-full px-3 py-2 border border-gray-600 placeholder-gray-500 text-white bg-gray-900 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+               placeholder="you@example.com">
+      </div>
+      <div>
+        <label for="password" class="block text-sm font-medium text-gray-300 mb-1">Password</label>
+        <input id="password" name="password" type="password" required autocomplete="current-password"
+               class="appearance-none block w-full px-3 py-2 border border-gray-600 placeholder-gray-500 text-white bg-gray-900 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+               placeholder="••••••••">
+      </div>
+      <button type="submit" id="login-submit"
+              class="btn-glow w-full flex justify-center items-center gap-2 py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors">
+        <i class="fas fa-sign-in-alt"></i>
+        <span data-label>Sign in</span>
+      </button>
+      <div class="text-center text-sm">
+        <a href="{{ base_path }}/" class="text-yellow-400 hover:underline">← Back to Store</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    var form = document.getElementById('login-form');
+    var errorBox = document.getElementById('login-error');
+    var errorMsg = document.getElementById('login-error-msg');
+    var submitBtn = document.getElementById('login-submit');
+    var label = submitBtn.querySelector('[data-label]');
+
+    function showError(msg) {
+      errorMsg.textContent = msg;
+      errorBox.classList.remove('hidden');
+    }
+
+    form.addEventListener('submit', async function (ev) {
+      ev.preventDefault();
+      errorBox.classList.add('hidden');
+      submitBtn.setAttribute('aria-busy', 'true');
+      label.textContent = 'Signing in…';
+      try {
+        var res = await fetch('/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            email: form.email.value.trim(),
+            password: form.password.value
+          })
+        });
+        if (!res.ok) {
+          var body = await res.json().catch(function () { return {}; });
+          throw new Error(body.detail || ('Login failed (HTTP ' + res.status + ')'));
+        }
+        window.location.href = (window.BASE_PATH || '') + '/admin/dashboard';
+      } catch (err) {
+        showError(err.message || 'Invalid credentials');
+        submitBtn.removeAttribute('aria-busy');
+        label.textContent = 'Sign in';
+      }
+    });
+  })();
+</script>
+{% endblock %}

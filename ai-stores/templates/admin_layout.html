@@ -1,0 +1,298 @@
+{% extends "_base.html" %}
+
+{%- set store = (store[0] if store is sequence and not store is mapping and store else store) or {} -%}
+{% set seo_title = 'Layout — ' ~ (store.name or 'AI Stores') %}
+{% set robots    = 'noindex,nofollow' %}
+{% set nav_mode  = 'admin' %}
+
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.3/Sortable.min.js" defer></script>
+<script defer src="/static/js/admin-sortable.js"></script>
+<style>
+  .layout-card { transition: box-shadow .2s ease, border-color .2s ease, opacity .2s ease; }
+  .layout-card.is-hidden { opacity: .55; }
+  .layout-card.is-ghost { border: 2px dashed rgb(var(--store-theme-primary)); background: rgb(var(--store-theme-primary) / .08); }
+  .layout-card.is-dragging { opacity: .5; }
+  .admin-drag-handle { cursor: grab; user-select: none; }
+  .admin-drag-handle:active { cursor: grabbing; }
+  .type-badge { text-transform: capitalize; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 sm:px-6 py-6 sm:py-10">
+  <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 gap-4 reveal">
+    <div>
+      <h1 class="text-2xl sm:text-4xl font-bold">Layout</h1>
+      <p class="text-sm text-gray-400 mt-1">
+        Drag <i class="fas fa-grip-vertical mx-1"></i> to reorder · toggle visibility · edit settings, then <strong>Save</strong>.
+        The homepage renders these sections top-to-bottom.
+      </p>
+    </div>
+    <div class="flex flex-col sm:flex-row items-stretch gap-2 sm:gap-3 w-full sm:w-auto">
+      <a href="{{ base_path }}/admin/dashboard" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded-lg transition-colors text-center">
+        <i class="fas fa-arrow-left mr-2"></i>Dashboard
+      </a>
+      <a href="{{ base_path }}/" target="_blank" rel="noopener" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors text-center">
+        <i class="fas fa-eye mr-2"></i>View Live
+      </a>
+    </div>
+  </div>
+
+  <!-- Add section -->
+  <details class="reveal bg-gray-800 border border-gray-700 rounded-xl p-4 sm:p-5 mb-6">
+    <summary class="cursor-pointer font-semibold text-white select-none">
+      <i class="fas fa-plus mr-2"></i>Add a section
+    </summary>
+    <form id="add-section-form" class="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div>
+        <label class="block text-gray-400 text-xs mb-1">Type</label>
+        <select name="type" required class="w-full px-3 py-2 bg-gray-900 border border-gray-700 text-white rounded-md">
+          <option value="hero">Hero</option>
+          <option value="catalog">Catalog</option>
+          <option value="specials">Specials</option>
+          <option value="richtext">Rich text</option>
+          <option value="gallery">Gallery</option>
+          <option value="contact">Contact</option>
+          <option value="cta">Call to action</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-gray-400 text-xs mb-1">Key (unique, stable)</label>
+        <input type="text" name="key" required placeholder="e.g. about" pattern="[a-z0-9_\-]+"
+               class="w-full px-3 py-2 bg-gray-900 border border-gray-700 text-white rounded-md">
+      </div>
+      <div>
+        <label class="block text-gray-400 text-xs mb-1">Title (admin label)</label>
+        <input type="text" name="title" placeholder="e.g. About us"
+               class="w-full px-3 py-2 bg-gray-900 border border-gray-700 text-white rounded-md">
+      </div>
+      <div>
+        <label class="block text-gray-400 text-xs mb-1">Nav label (optional)</label>
+        <input type="text" name="nav_label" placeholder="Shown in header nav if set"
+               class="w-full px-3 py-2 bg-gray-900 border border-gray-700 text-white rounded-md">
+      </div>
+      <div>
+        <label class="block text-gray-400 text-xs mb-1">Anchor (in-page id)</label>
+        <input type="text" name="anchor" placeholder="e.g. about" pattern="[a-z0-9_\-]+"
+               class="w-full px-3 py-2 bg-gray-900 border border-gray-700 text-white rounded-md">
+      </div>
+      <div class="flex items-end">
+        <button type="submit" class="store-btn w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-bold rounded-md transition-colors">
+          <i class="fas fa-plus mr-2"></i>Add section
+        </button>
+      </div>
+    </form>
+  </details>
+
+  <!-- Section list -->
+  <div id="layout-list" class="space-y-4">
+    {% for section in sections %}
+    <article class="layout-card reveal bg-gray-800 border border-gray-700 rounded-xl p-4 sm:p-5 {% if not section.visible %}is-hidden{% endif %}"
+             data-id="{{ section._id }}" data-key="{{ section.key }}">
+      <div class="flex items-start gap-3">
+        <div class="admin-drag-handle text-gray-500 hover:text-gray-300 pt-1" title="Drag to reorder">
+          <i class="fas fa-grip-vertical text-lg"></i>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex flex-wrap items-center gap-2 mb-3">
+            <span class="inline-flex items-center justify-center min-w-[1.75rem] h-7 px-2 rounded-full bg-gray-900 text-gray-300 text-xs font-bold" data-position>{{ loop.index }}</span>
+            <span class="type-badge px-2 py-0.5 text-xs font-bold bg-blue-900/70 text-blue-200 rounded-full">{{ section.type }}</span>
+            <span class="font-semibold text-white">{{ section.title or section.key }}</span>
+            <span class="text-xs text-gray-500 font-mono">#{{ section.anchor or section.key }}</span>
+            <a href="{{ base_path }}/#{{ section.anchor or section.key }}" target="_blank" rel="noopener" class="text-xs text-gray-400 hover:text-yellow-400 ml-1"><i class="fas fa-up-right-from-square"></i></a>
+
+            <label class="ml-auto inline-flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" data-field="visible" {% if section.visible %}checked{% endif %}
+                     class="h-4 w-4 accent-blue-500">
+              <span class="text-sm text-gray-300">Visible</span>
+            </label>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label class="block text-gray-400 text-xs mb-1">Title</label>
+              <input type="text" data-field="title" value="{{ section.title or '' }}"
+                     class="w-full px-3 py-2 bg-gray-900 border border-gray-700 text-white text-sm rounded-md">
+            </div>
+            <div>
+              <label class="block text-gray-400 text-xs mb-1">Nav label</label>
+              <input type="text" data-field="nav_label" value="{{ section.nav_label or '' }}" placeholder="(hidden from nav)"
+                     class="w-full px-3 py-2 bg-gray-900 border border-gray-700 text-white text-sm rounded-md">
+            </div>
+            <div>
+              <label class="block text-gray-400 text-xs mb-1">Anchor</label>
+              <input type="text" data-field="anchor" value="{{ section.anchor or '' }}"
+                     class="w-full px-3 py-2 bg-gray-900 border border-gray-700 text-white text-sm rounded-md">
+            </div>
+          </div>
+
+          <div class="mt-3">
+            <label class="block text-gray-400 text-xs mb-1">Settings (JSON)</label>
+            <textarea data-field="settings" rows="4" spellcheck="false"
+                      class="w-full px-3 py-2 bg-gray-900 border border-gray-700 text-white text-sm rounded-md font-mono">{{ section.settings | tojson }}</textarea>
+            <p class="text-xs text-red-400 mt-1 hidden" data-json-error></p>
+          </div>
+
+          <div class="flex items-center gap-3 mt-3">
+            <button type="button" data-action="save" class="store-btn px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg text-sm transition-colors">
+              <i class="fas fa-save mr-1"></i>Save
+            </button>
+            <button type="button" data-action="delete" class="px-4 py-2 bg-red-700/50 hover:bg-red-600 text-white font-semibold rounded-lg text-sm transition-colors">
+              <i class="fas fa-trash mr-1"></i>Delete
+            </button>
+            <span data-save-status class="text-sm" role="status"></span>
+          </div>
+        </div>
+      </div>
+    </article>
+    {% else %}
+    <div class="bg-gray-800 border border-gray-700 rounded-xl p-10 text-center text-gray-400">
+      <i class="fas fa-layer-group text-5xl mb-3 opacity-40"></i>
+      <p>No sections yet. Add one above — or restart the app to seed the default layout.</p>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div id="store-toast" class="store-toast" role="status" aria-live="polite"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  'use strict';
+  const API = (window.BASE_PATH || '') + '/api/sections';
+  const listEl = document.getElementById('layout-list');
+  const toastEl = document.getElementById('store-toast');
+
+  function toast(msg, kind) {
+    if (!toastEl) return;
+    toastEl.textContent = msg;
+    toastEl.classList.remove('is-ok', 'is-err');
+    if (kind === 'ok') toastEl.classList.add('is-ok');
+    if (kind === 'err') toastEl.classList.add('is-err');
+    toastEl.classList.add('is-show');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => toastEl.classList.remove('is-show'), 2600);
+  }
+
+  async function apiJson(url, opts) {
+    opts = opts || {};
+    const res = await fetch(url, {
+      credentials: 'same-origin',
+      ...opts,
+      headers: { Accept: 'application/json', ...(opts.headers || {}), ...(opts.body ? { 'Content-Type': 'application/json' } : {}) },
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || ('HTTP ' + res.status));
+    }
+    return res.json();
+  }
+
+  // Pretty-print the settings JSON on load.
+  document.querySelectorAll('[data-field="settings"]').forEach((ta) => {
+    try { ta.value = JSON.stringify(JSON.parse(ta.value || '{}'), null, 2); } catch (_) { /* leave raw */ }
+  });
+
+  function card(el) { return el.closest('[data-id]'); }
+
+  async function saveCard(cardEl) {
+    const id = cardEl.dataset.id;
+    const statusEl = cardEl.querySelector('[data-save-status]');
+    const errEl = cardEl.querySelector('[data-json-error]');
+    errEl.classList.add('hidden');
+    let settings;
+    try {
+      settings = JSON.parse(cardEl.querySelector('[data-field="settings"]').value || '{}');
+    } catch (e) {
+      errEl.textContent = 'Invalid JSON: ' + e.message;
+      errEl.classList.remove('hidden');
+      return;
+    }
+    const patch = {
+      title: cardEl.querySelector('[data-field="title"]').value.trim(),
+      nav_label: cardEl.querySelector('[data-field="nav_label"]').value.trim() || null,
+      anchor: cardEl.querySelector('[data-field="anchor"]').value.trim(),
+      visible: cardEl.querySelector('[data-field="visible"]').checked,
+      settings: settings,
+    };
+    statusEl.textContent = 'Saving…';
+    statusEl.className = 'text-sm text-gray-400';
+    try {
+      await apiJson(API + '/' + id, { method: 'PATCH', body: JSON.stringify(patch) });
+      statusEl.textContent = 'Saved ✓';
+      statusEl.className = 'text-sm text-green-400';
+      cardEl.classList.toggle('is-hidden', !patch.visible);
+      setTimeout(() => { statusEl.textContent = ''; }, 2500);
+    } catch (err) {
+      statusEl.textContent = err.message;
+      statusEl.className = 'text-sm text-red-400';
+    }
+  }
+
+  async function deleteCard(cardEl) {
+    const id = cardEl.dataset.id;
+    const key = cardEl.dataset.key;
+    if (!confirm('Delete section "' + key + '"? This cannot be undone.')) return;
+    try {
+      await apiJson(API + '/' + id, { method: 'DELETE' });
+      cardEl.remove();
+      toast('Section deleted', 'ok');
+    } catch (err) {
+      toast('Delete failed: ' + err.message, 'err');
+    }
+  }
+
+  listEl.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('[data-action]');
+    if (!btn) return;
+    const cardEl = card(btn);
+    if (btn.dataset.action === 'save') saveCard(cardEl);
+    else if (btn.dataset.action === 'delete') deleteCard(cardEl);
+  });
+
+  // Toggle visibility saves immediately.
+  listEl.addEventListener('change', (ev) => {
+    const cb = ev.target.closest('[data-field="visible"]');
+    if (!cb) return;
+    const cardEl = card(cb);
+    cardEl.classList.toggle('is-hidden', !cb.checked);
+    apiJson(API + '/' + cardEl.dataset.id, { method: 'PATCH', body: JSON.stringify({ visible: cb.checked }) })
+      .then(() => toast(cb.checked ? 'Shown' : 'Hidden', 'ok'))
+      .catch((err) => toast('Update failed: ' + err.message, 'err'));
+  });
+
+  // Drag-to-reorder via the shared helper.
+  if (window.AdminSortable) {
+    window.AdminSortable.initWhenReady({ grid: '#layout-list', handle: '.admin-drag-handle', item: '[data-id]', api: API, toast: toast });
+  }
+
+  // Add a new section.
+  const addForm = document.getElementById('add-section-form');
+  addForm.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const data = Object.fromEntries(new FormData(addForm));
+    const cards = Array.from(listEl.querySelectorAll('[data-id]'));
+    const payload = {
+      key: (data.key || '').trim(),
+      type: data.type,
+      title: (data.title || '').trim(),
+      nav_label: (data.nav_label || '').trim() || null,
+      anchor: (data.anchor || data.key || '').trim(),
+      order: cards.length + 1,
+      visible: true,
+      settings: {},
+    };
+    try {
+      await apiJson(API, { method: 'POST', body: JSON.stringify(payload) });
+      toast('Section added', 'ok');
+      setTimeout(() => window.location.reload(), 500);
+    } catch (err) {
+      toast('Add failed: ' + err.message, 'err');
+    }
+  });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,563 @@
+{
+  "schema_version": "2.0",
+  "slug": "ai-stores",
+  "name": "AI Stores",
+  "description": "A white-label, admin-composable PWA storefront — manifest-driven on mdb-engine.",
+  "status": "active",
+
+  "auth": {
+    "mode": "app",
+    "default_policy": "public",
+    "protected_routes": [
+      "/admin/*",
+      "/admin/upload-image",
+      "/admin/upload-video"
+    ],
+    "public_routes": [
+      "/",
+      "/item/*",
+      "/contact",
+      "/contact/thanks",
+      "/api/submit-inquiry",
+      "/auth/login",
+      "/auth/logout",
+      "/static/*",
+      "/static/service-worker.js",
+      "/static/site.webmanifest",
+      "/favicon.ico",
+      "/robots.txt",
+      "/sitemap.xml",
+      "/sitemap-*.xml",
+      "/health",
+      "/__mdb/health/*"
+    ],
+    "csrf_protection": false,
+    "users": {
+      "enabled": true,
+      "strategy": "app_users",
+      "collection_name": "users",
+      "session_cookie_name": "ais_session",
+      "session_ttl_seconds": 86400,
+      "allow_registration": false,
+      "demo_users": [
+        {
+          "email": "{{env.ADMIN_EMAIL}}",
+          "password": "{{env.ADMIN_PASSWORD}}",
+          "role": "admin",
+          "auto_create": true
+        }
+      ],
+      "demo_user_seed_strategy": "auto",
+      "allow_demo_access": false
+    },
+    "rate_limits": {
+      "/auth/login": {
+        "max_attempts": 5,
+        "window_seconds": 900
+      }
+    }
+  },
+
+  "collections": {
+    "stores": {
+      "auto_crud": true,
+      "timestamps": true,
+      "auth": {
+        "public_read": true,
+        "write_roles": ["admin"]
+      },
+      "schema": {
+        "type": "object",
+        "properties": {
+          "name":                    { "type": "string" },
+          "slug_id":                 { "type": "string", "x-unique": true },
+          "business_type":           { "type": "string" },
+          "tagline":                 { "type": "string" },
+          "about_text":              { "type": "string" },
+          "address":                 { "type": "string" },
+          "email":                   { "type": "string" },
+          "notify_enabled":          { "type": "boolean", "default": true },
+          "notify_email":            { "type": ["string", "null"] },
+          "phone":                   { "type": "string" },
+          "phone_display":           { "type": "string" },
+          "hours":                   { "type": "string" },
+          "lang":                    { "type": "string", "default": "en" },
+          "logo_url":                { "type": ["string", "null"] },
+          "hero_image_url":          { "type": ["string", "null"] },
+          "google_maps_embed_html":  { "type": "string" },
+          "inventory_description":   { "type": "string" },
+          "cta_label":               { "type": "string", "default": "Contact" },
+          "cta_href":                { "type": "string", "default": "/contact" },
+          "schema_type":             { "type": "string", "default": "LocalBusiness" },
+          "currency":                { "type": "string", "default": "USD" },
+          "price_range":             { "type": "string", "default": "$$" },
+          "seo_keywords":            { "type": "string" },
+          "google_tag_id":           { "type": ["string", "null"] },
+          "meta_pixel_id":           { "type": ["string", "null"] },
+          "socials": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "icon": { "type": "string" },
+                "url":  { "type": "string", "format": "uri" }
+              }
+            }
+          },
+          "theme_primary":        { "type": "string", "default": "#5e61f1" },
+          "theme_secondary":      { "type": "string", "default": "#22d3ee" },
+          "theme_background":     { "type": "string", "default": "#0b1120" },
+          "theme_surface":        { "type": "string", "default": "#151d2e" },
+          "theme_text":           { "type": "string", "default": "#f8fafc" },
+          "theme_text_secondary": { "type": "string", "default": "#94a3b8" },
+          "theme_on_primary":     { "type": "string", "default": "#ffffff" },
+          "theme_on_secondary":   { "type": "string", "default": "#0a0a0a" },
+          "style_preset":         { "type": "string", "default": "midnight" },
+          "font_heading":         { "type": "string", "default": "'Space Grotesk', system-ui, sans-serif" },
+          "font_body":            { "type": "string", "default": "'Inter', system-ui, sans-serif" },
+          "fonts_google":         { "type": "string", "default": "Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700" },
+          "theme_radius":         { "type": "string", "default": "0.75rem" },
+          "heading_transform":    { "type": "string", "default": "none" },
+          "heading_spacing":      { "type": "string", "default": "-0.02em" }
+        }
+      }
+    },
+
+    "sections": {
+      "auto_crud": true,
+      "timestamps": true,
+      "auth": {
+        "public_read": true,
+        "write_roles": ["admin"],
+        "create_roles": ["admin"]
+      },
+      "defaults": { "visible": true, "order": 1, "settings": {} },
+      "scopes": {
+        "visible": { "visible": true }
+      },
+      "schema": {
+        "type": "object",
+        "required": ["key", "type"],
+        "properties": {
+          "key":       { "type": "string", "x-unique": true },
+          "type":      { "type": "string", "enum": ["hero", "catalog", "specials", "richtext", "gallery", "contact", "cta"] },
+          "title":     { "type": "string" },
+          "order":     { "type": "integer", "default": 1 },
+          "visible":   { "type": "boolean", "default": true },
+          "nav_label": { "type": ["string", "null"] },
+          "anchor":    { "type": "string" },
+          "settings":  { "type": "object", "additionalProperties": true }
+        }
+      }
+    },
+
+    "items": {
+      "auto_crud": true,
+      "timestamps": true,
+      "soft_delete": false,
+      "auth": {
+        "public_read": true,
+        "write_roles": ["admin"],
+        "create_roles": ["admin"]
+      },
+      "defaults": { "status": "Available" },
+      "scopes": {
+        "showcase": { "status": { "$ne": "Sold" } }
+      },
+      "schema": {
+        "type": "object",
+        "required": ["name", "item_code"],
+        "properties": {
+          "name":        { "type": "string" },
+          "item_code":   { "type": "string", "x-unique": true },
+          "price":       { "type": ["number", "null"], "minimum": 0 },
+          "category":    { "type": "string" },
+          "description": { "type": "string" },
+          "image_url":   { "type": ["string", "null"] },
+          "status":      { "type": "string", "enum": ["Available", "Limited Availability", "Pending", "Sold"], "default": "Available" },
+          "date_added":  { "type": "string", "format": "date-time" },
+          "attributes":  { "type": "object", "additionalProperties": { "type": "string" } }
+        }
+      }
+    },
+
+    "specials": {
+      "auto_crud": true,
+      "timestamps": true,
+      "auth": {
+        "public_read": true,
+        "write_roles": ["admin"],
+        "create_roles": ["admin"]
+      },
+      "schema": {
+        "type": "object",
+        "required": ["title", "content"],
+        "properties": {
+          "title":            { "type": "string" },
+          "description":      { "type": "string" },
+          "content":          { "type": "string" },
+          "image_url":        { "type": ["string", "null"] },
+          "discount_percent": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+          "valid_until":      { "type": ["string", "null"], "format": "date-time" },
+          "date_created":     { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+
+    "slideshow": {
+      "auto_crud": true,
+      "timestamps": true,
+      "auth": {
+        "public_read": true,
+        "write_roles": ["admin"],
+        "create_roles": ["admin"]
+      },
+      "defaults": { "order": 1, "transition": "kenburns", "duration_ms": 6000, "focal_x": 0.5, "focal_y": 0.5, "media_type": "image" },
+      "schema": {
+        "type": "object",
+        "required": ["image_url"],
+        "properties": {
+          "image_url":   { "type": "string" },
+          "video_url":   { "type": ["string", "null"] },
+          "media_type":  { "type": "string", "enum": ["image", "video"], "default": "image" },
+          "caption":     { "type": "string" },
+          "order":       { "type": "integer", "default": 1 },
+          "transition":  { "type": "string", "enum": ["fade", "kenburns", "zoom", "slide"], "default": "kenburns" },
+          "duration_ms": { "type": "integer", "minimum": 2000, "maximum": 30000, "default": 6000 },
+          "focal_x":     { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
+          "focal_y":     { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 },
+          "date_added":  { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+
+    "inquiries": {
+      "auto_crud": true,
+      "timestamps": true,
+      "auth": {
+        "roles": ["admin"],
+        "write_roles": ["admin"],
+        "create_roles": ["admin"]
+      },
+      "defaults": {
+        "status": "New",
+        "read": false,
+        "archived": false,
+        "notes": "",
+        "type": "inquiry"
+      },
+      "writable_fields": ["read", "archived", "status", "notes"],
+      "scopes": {
+        "inbox":    { "archived": false },
+        "unread":   { "archived": false, "read": false },
+        "archived": { "archived": true }
+      },
+      "schema": {
+        "type": "object",
+        "required": ["customer_name", "customer_contact"],
+        "properties": {
+          "type":               { "type": "string", "default": "inquiry" },
+          "item_id":            { "type": "string" },
+          "item_name":          { "type": "string" },
+          "service_category":   { "type": "string", "maxLength": 64 },
+          "issue":              { "type": "string", "maxLength": 200 },
+          "customer_name":      { "type": "string", "minLength": 1, "maxLength": 200 },
+          "customer_contact":   { "type": "string", "minLength": 1, "maxLength": 200 },
+          "message":            { "type": "string", "maxLength": 5000 },
+          "preferred_date":     { "type": "string", "maxLength": 32 },
+          "date_submitted":     { "type": "string", "format": "date-time" },
+          "status":             { "type": "string", "enum": ["New", "Contacted", "Won", "Lost"], "default": "New" },
+          "read":               { "type": "boolean", "default": false },
+          "archived":           { "type": "boolean", "default": false },
+          "notes":              { "type": "string" }
+        }
+      },
+      "hooks": {
+        "after_create": [
+          {
+            "action": "insert",
+            "collection": "audit_log",
+            "document": {
+              "event": "inquiry_created",
+              "entity_id": "{{doc._id}}",
+              "item_id": "{{doc.item_id}}",
+              "customer_name": "{{doc.customer_name}}",
+              "timestamp": "$$NOW"
+            }
+          }
+        ]
+      }
+    },
+
+    "audit_log": {
+      "auto_crud": true,
+      "read_only": true,
+      "timestamps": true,
+      "auth": {
+        "roles": ["admin"]
+      },
+      "schema": {
+        "type": "object",
+        "properties": {
+          "event":     { "type": "string" },
+          "entity_id": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  },
+
+  "section_types": {
+    "hero": {
+      "partial": "_partials/sections/hero.html",
+      "label": "Hero slideshow",
+      "settings": {
+        "show_cta": { "type": "boolean", "default": true, "label": "Show call-to-action button" }
+      }
+    },
+    "catalog": {
+      "partial": "_partials/sections/catalog.html",
+      "label": "Catalog grid",
+      "settings": {
+        "heading":    { "type": "string",  "default": "Our Catalog", "label": "Heading" },
+        "subheading": { "type": "string",  "default": "",            "label": "Subheading" },
+        "columns":    { "type": "integer", "default": 3, "enum": [2, 3, 4], "label": "Columns" }
+      }
+    },
+    "specials": {
+      "partial": "_partials/sections/specials.html",
+      "label": "Specials & announcements",
+      "settings": {
+        "heading": { "type": "string", "default": "Specials & Announcements", "label": "Heading" }
+      }
+    },
+    "richtext": {
+      "partial": "_partials/sections/richtext.html",
+      "label": "Rich text block",
+      "settings": {
+        "heading":    { "type": "string", "default": "",           "label": "Heading" },
+        "body":       { "type": "string", "default": "",           "label": "Body (HTML allowed)" },
+        "align":      { "type": "string", "default": "center", "enum": ["left", "center", "right"], "label": "Text alignment" },
+        "background": { "type": "string", "default": "background", "enum": ["background", "surface"], "label": "Background" }
+      }
+    },
+    "gallery": {
+      "partial": "_partials/sections/gallery.html",
+      "label": "Image gallery",
+      "settings": {
+        "heading": { "type": "string", "default": "Gallery", "label": "Heading" },
+        "images":  { "type": "array",  "default": [],        "label": "Image URLs" }
+      }
+    },
+    "contact": {
+      "partial": "_partials/sections/contact.html",
+      "label": "Contact & map",
+      "settings": {
+        "heading":   { "type": "string",  "default": "Visit Us", "label": "Heading" },
+        "show_form": { "type": "boolean", "default": true,       "label": "Show contact form" },
+        "show_map":  { "type": "boolean", "default": true,       "label": "Show map" }
+      }
+    },
+    "cta": {
+      "partial": "_partials/sections/cta.html",
+      "label": "Call-to-action banner",
+      "settings": {
+        "heading":      { "type": "string", "default": "Ready when you are", "label": "Heading" },
+        "subtext":      { "type": "string", "default": "",                   "label": "Subtext" },
+        "button_label": { "type": "string", "default": "Get in touch",       "label": "Button label" },
+        "button_href":  { "type": "string", "default": "/contact",           "label": "Button link" },
+        "bg_image":     { "type": "string", "default": "",                   "label": "Background image URL" }
+      }
+    }
+  },
+
+  "managed_indexes": {
+    "stores": [
+      { "name": "stores_slug_id_unique", "type": "regular", "keys": { "slug_id": 1 }, "options": { "unique": true } }
+    ],
+    "sections": [
+      { "name": "sections_order", "type": "regular", "keys": { "order": 1 } },
+      { "name": "sections_key_unique", "type": "regular", "keys": { "key": 1 }, "options": { "unique": true } }
+    ],
+    "items": [
+      { "name": "items_status_date_added", "type": "regular", "keys": [["status", 1], ["date_added", -1]] },
+      { "name": "items_item_code_unique", "type": "regular", "keys": { "item_code": 1 }, "options": { "unique": true } }
+    ],
+    "specials": [
+      { "name": "specials_date_created", "type": "regular", "keys": { "date_created": -1 } }
+    ],
+    "slideshow": [
+      { "name": "slideshow_order", "type": "regular", "keys": { "order": 1 } }
+    ],
+    "inquiries": [
+      { "name": "inquiries_read_archived_date",  "type": "regular", "keys": [["read", 1], ["archived", 1], ["date_submitted", -1]] },
+      { "name": "inquiries_item_id",             "type": "regular", "keys": { "item_id": 1 } }
+    ],
+    "audit_log": [
+      { "name": "audit_log_timestamp_desc", "type": "regular", "keys": { "timestamp": -1 } }
+    ]
+  },
+
+  "ssr": {
+    "enabled": true,
+    "site_name": "AI Stores",
+    "site_description": "A modern, installable storefront you can shape without code — reorder sections, manage your catalog, and go live in minutes.",
+    "robots": {
+      "allow": ["/"],
+      "disallow": ["/admin/", "/api/", "/auth/", "/__mdb/"],
+      "sitemap": "{{base_url}}/sitemap.xml"
+    },
+    "sitemap": {
+      "routes": {
+        "/": { "changefreq": "daily", "priority": 1.0 },
+        "/contact": { "changefreq": "monthly", "priority": 0.8 },
+        "/item/{item_id}": { "changefreq": "weekly", "priority": 0.7 }
+      }
+    },
+    "routes": {
+      "/": {
+        "template": "store_home.html",
+        "data": {
+          "store":     { "collection": "stores", "limit": 1 },
+          "layout":    { "collection": "sections", "scope": "visible", "sort": { "order": 1 }, "limit": 50 },
+          "items":     { "collection": "items", "scope": "showcase", "sort": { "date_added": -1 }, "limit": 12 },
+          "specials":  { "collection": "specials", "sort": { "date_created": -1 }, "limit": 6 },
+          "slideshow": { "collection": "slideshow", "sort": { "order": 1 }, "limit": 50 }
+        },
+        "seo": {
+          "title":       "{{ store.name }} — {{ store.tagline }}",
+          "description": "{{ store.about_text }}",
+          "og_image":    "{{ store.hero_image_url }}"
+        },
+        "cache": { "ttl": "60s", "scope": "public" }
+      },
+      "/item/{item_id}": {
+        "template": "item_details.html",
+        "data": {
+          "store": { "collection": "stores", "limit": 1 },
+          "item":  { "collection": "items", "id_param": "item_id" }
+        },
+        "seo": {
+          "title":       "{{ item.name }} — {{ store.name }}",
+          "description": "{{ item.description }}",
+          "og_image":    "{{ item.image_url }}"
+        },
+        "cache": { "ttl": "60s", "scope": "public" }
+      },
+      "/contact": {
+        "template": "contact.html",
+        "data": {
+          "store": { "collection": "stores", "limit": 1 },
+          "items": { "collection": "items", "scope": "showcase", "sort": { "date_added": -1 }, "limit": 100 }
+        },
+        "seo": {
+          "title":       "Contact — {{ store.name }}",
+          "description": "Get in touch with {{ store.name }}. Send a message and we will reply shortly.",
+          "og_image":    "{{ store.hero_image_url }}"
+        },
+        "cache": { "ttl": "60s", "scope": "public" }
+      },
+      "/contact/thanks": {
+        "template": "contact_thanks.html",
+        "data": {
+          "store": { "collection": "stores", "limit": 1 }
+        }
+      },
+      "/admin/login": {
+        "template": "admin_login.html",
+        "data": {
+          "store": { "collection": "stores", "limit": 1 }
+        }
+      },
+      "/admin/dashboard": {
+        "template": "admin_dashboard.html",
+        "auth": true,
+        "data": {
+          "store": { "collection": "stores", "limit": 1 }
+        }
+      },
+      "/admin/layout": {
+        "template": "admin_layout.html",
+        "auth": true,
+        "data": {
+          "store":    { "collection": "stores", "limit": 1 },
+          "sections": { "collection": "sections", "sort": { "order": 1 }, "limit": 100 }
+        }
+      },
+      "/admin/items": {
+        "template": "admin_items.html",
+        "auth": true,
+        "data": {
+          "store": { "collection": "stores", "limit": 1 },
+          "items": { "collection": "items", "sort": { "date_added": -1 }, "limit": 500 }
+        }
+      },
+      "/admin/specials": {
+        "template": "admin_specials.html",
+        "auth": true,
+        "data": {
+          "store":    { "collection": "stores", "limit": 1 },
+          "specials": { "collection": "specials", "sort": { "date_created": -1 }, "limit": 500 }
+        }
+      },
+      "/admin/slideshow": {
+        "template": "admin_slideshow.html",
+        "auth": true,
+        "data": {
+          "store":     { "collection": "stores", "limit": 1 },
+          "slideshow": { "collection": "slideshow", "sort": { "order": 1 }, "limit": 500 }
+        }
+      },
+      "/admin/inquiries": {
+        "template": "admin_inquiries.html",
+        "auth": true,
+        "data": {
+          "store":     { "collection": "stores", "limit": 1 },
+          "inquiries": { "collection": "inquiries", "scope": "inbox", "sort": { "date_submitted": -1 }, "limit": 500 }
+        }
+      }
+    }
+  },
+
+  "admin_api": {
+    "enabled": true,
+    "path_prefix": "/__mdb",
+    "modules": {
+      "reconciler": { "enabled": true, "scopes": ["read", "apply"] },
+      "trash":      { "enabled": true, "scopes": ["read", "restore", "purge"] },
+      "secrets":    { "enabled": true, "scopes": ["rotate"] },
+      "audit":      { "enabled": true, "scopes": ["read"] },
+      "health":     { "enabled": true, "public": true }
+    }
+  },
+
+  "manifest_tracking": {
+    "enabled": true,
+    "mode": "reconcile",
+    "protect_collections": ["inquiries", "users", "audit_log", "sections"],
+    "allow_immediate_drop": false,
+    "retention": {
+      "max_revisions": 50,
+      "max_age_days": 90,
+      "trash_ttl_days": 14
+    },
+    "sweeper": {
+      "enabled": true,
+      "interval_seconds": 3600
+    },
+    "confirm_if": {
+      "destructive_ops": 2,
+      "docs_at_risk": 500,
+      "protect_on_match": ["inquiries", "users", "audit_log", "sections"]
+    }
+  },
+
+  "cors": {
+    "allow_origins": [],
+    "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    "allow_headers": ["*"],
+    "allow_credentials": true
+  },
+
+  "initial_data": {}
+}

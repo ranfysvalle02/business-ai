@@ -1,0 +1,141 @@
+name: CI
+
+# Runs the AI Stores test suite against a real MongoDB Atlas Local (single-node
+# replica set) — the same engine used in dev/prod — so cross-tenant isolation,
+# auth gating, slug validation and provisioning idempotency are verified end to
+# end. The app lives in ai-stores/, so every step is scoped there.
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "ai-stores/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "ai-stores/**"
+      - ".github/workflows/ci.yml"
+
+defaults:
+  run:
+    working-directory: ai-stores
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      MONGODB_URI: mongodb://localhost:27017/?directConnection=true
+      MDB_DB_NAME: ai_stores_test
+      MDB_JWT_SECRET: ci-only-jwt-secret-at-least-32-characters-long
+      ADMIN_EMAIL: admin@ci.local
+      ADMIN_PASSWORD: ci-admin-password-123
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            ai-stores/requirements.txt
+            ai-stores/requirements-dev.txt
+
+      - name: Start MongoDB Atlas Local
+        working-directory: .
+        run: |
+          docker run -d --name atlas-local -p 27017:27017 \
+            mongodb/mongodb-atlas-local:latest
+
+      - name: Wait for a writable PRIMARY
+        working-directory: .
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec atlas-local mongosh --quiet --host 127.0.0.1 --port 27017 \
+                 --eval "db.hello().isWritablePrimary" 2>/dev/null | grep -q true; then
+              echo "MongoDB is ready (attempt $i)"; exit 0
+            fi
+            echo "Waiting for MongoDB replica-set election... ($i)"; sleep 2
+          done
+          echo "MongoDB did not become primary in time"; docker logs atlas-local; exit 1
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest -ra
+
+  # Builds and BOOTS the real container image against a live Mongo — the app is
+  # only exercised in-process by the `test` job, so this is what catches
+  # image-level breakage (e.g. a module the Dockerfile forgot to COPY) that
+  # unit tests can't see. Ollama is intentionally omitted; AI degrades to 503.
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create network + start MongoDB Atlas Local
+        working-directory: .
+        run: |
+          docker network create smoke
+          docker run -d --name mongo --network smoke \
+            mongodb/mongodb-atlas-local:latest
+
+      - name: Wait for a writable PRIMARY
+        working-directory: .
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec mongo mongosh --quiet --host 127.0.0.1 --port 27017 \
+                 --eval "db.hello().isWritablePrimary" 2>/dev/null | grep -q true; then
+              echo "MongoDB is ready (attempt $i)"; exit 0
+            fi
+            echo "Waiting for MongoDB replica-set election... ($i)"; sleep 2
+          done
+          echo "MongoDB did not become primary in time"; docker logs mongo; exit 1
+
+      - name: Build image
+        run: docker build -t ai-stores:ci .
+
+      - name: Boot container
+        working-directory: .
+        run: |
+          docker run -d --name app --network smoke -p 8000:8000 \
+            -e MONGODB_URI="mongodb://mongo:27017/?directConnection=true" \
+            -e MDB_DB_NAME=ai_stores_smoke \
+            -e MDB_JWT_SECRET=ci-only-jwt-secret-at-least-32-characters-long \
+            -e ADMIN_EMAIL=admin@ci.local \
+            -e ADMIN_PASSWORD=ci-admin-password-123 \
+            ai-stores:ci
+
+      - name: Smoke-test the running image
+        working-directory: .
+        run: |
+          # Health first (bootstrap seeds a `demo` store on first boot), then the
+          # platform console and a scoped storefront — proves the module graph,
+          # SSR and per-store scoping all work in the shipped image.
+          ok=""
+          for i in $(seq 1 60); do
+            code=$(curl -fsS -o /dev/null -w '%{http_code}' \
+              http://localhost:8000/__mdb/health/live 2>/dev/null || true)
+            if [ "$code" = "200" ]; then ok=1; echo "healthy (attempt $i)"; break; fi
+            echo "waiting for app... ($i)"; sleep 2
+          done
+          if [ -z "$ok" ]; then echo "app never became healthy"; docker logs app; exit 1; fi
+
+          fail=0
+          for path in /manage /demo/; do
+            code=$(curl -fsS -o /dev/null -w '%{http_code}' "http://localhost:8000$path" 2>/dev/null || true)
+            echo "GET $path -> $code"
+            [ "$code" = "200" ] || fail=1
+          done
+          if [ "$fail" != "0" ]; then echo "smoke assertions failed"; docker logs app; exit 1; fi
+
+      - name: App logs
+        if: always()
+        working-directory: .
+        run: docker logs app || true

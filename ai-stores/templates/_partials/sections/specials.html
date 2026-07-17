@@ -1,0 +1,40 @@
+{# Specials section — cards of promotions/announcements.
+   Reads: specials, section.settings.{heading}
+   Renders nothing when there are no specials. #}
+{% set _s = section.settings or {} %}
+{% set _heading = _s.heading or 'Specials & Announcements' %}
+{% if specials and specials|length > 0 %}
+<section id="{{ section.anchor or 'specials' }}" class="bg-store-surface py-12 sm:py-20 px-4 sm:px-6 border-t border-store-text/10">
+  <div class="container mx-auto">
+    <h2 class="reveal text-store-text text-2xl sm:text-4xl md:text-5xl font-extrabold text-center mb-8 sm:mb-12">{{ _heading }}</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 max-w-6xl mx-auto">
+      {% for special in specials[:6] %}
+      <article class="store-card !bg-store-bg reveal p-4 sm:p-6 shadow-md relative overflow-hidden"
+               data-reveal-delay="{{ loop.index0 % 6 }}">
+        {% if special.discount_percent %}
+        <span class="absolute top-3 right-3 px-3 py-1 rounded-full text-xs font-bold shadow bg-store-secondary text-store-onsecondary">
+          -{{ special.discount_percent|int }}%
+        </span>
+        {% endif %}
+        {% if special.image_url %}
+        <div class="store-card-img-wrap -mx-4 sm:-mx-6 -mt-4 sm:-mt-6 mb-4">
+          <img src="{{ special.image_url }}" alt="{{ special.title }}" loading="lazy" class="store-card-img fx-img w-full h-36 sm:h-40 object-cover">
+        </div>
+        {% endif %}
+        <h3 class="text-store-text text-lg sm:text-2xl font-bold mb-2">{{ special.title }}</h3>
+        {% if special.description %}
+        <p class="text-store-muted text-sm mb-3">{{ special.description }}</p>
+        {% endif %}
+        <p class="text-store-text whitespace-pre-wrap leading-relaxed">{{ special.content }}</p>
+        {% if special.valid_until %}
+        <p class="mt-4 text-xs text-store-primary uppercase tracking-wide">
+          <i class="fas fa-clock mr-1"></i>
+          Valid until {{ special.valid_until.strftime('%b %d, %Y') if special.valid_until.__class__.__name__ == 'datetime' else special.valid_until[:10] }}
+        </p>
+        {% endif %}
+      </article>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endif %}

@@ -1,0 +1,286 @@
+{% extends "_base.html" %}
+
+{%- set store = (store[0] if store is sequence and not store is mapping and store else store) or {} -%}
+{% set seo_title = 'Manage Items — ' ~ (store.name or 'AI Stores') %}
+{% set robots    = 'noindex,nofollow' %}
+{% set nav_mode  = 'admin' %}
+{% set business_config = {
+  'item_label': 'Item',
+  'item_plural': 'Items',
+  'item_code_label': 'Item Code',
+  'status_options': ['Available', 'Limited Availability', 'Pending', 'Sold']
+} %}
+
+{#- Existing categories, for the editor's pick-or-type control -#}
+{%- set ns = namespace(cats=[]) -%}
+{%- for it in items -%}
+  {%- if it.category and it.category not in ns.cats -%}{%- set _ = ns.cats.append(it.category) -%}{%- endif -%}
+{%- endfor -%}
+
+{% block head_extra %}
+<style>
+  .store-modal {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.7);
+    z-index: 1000;
+    overflow: auto;
+  }
+  .store-modal.is-active { display: flex; align-items: flex-start; justify-content: center; padding: 2rem 1rem; }
+  .store-modal-content {
+    background: #1f2937;
+    border: 1px solid #374151;
+    border-radius: .75rem;
+    width: 100%;
+    max-width: 640px;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 sm:px-6 py-6 sm:py-10">
+  <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 sm:mb-8 gap-4 reveal">
+    <h1 class="text-2xl sm:text-4xl font-bold">Manage {{ business_config.item_plural }}</h1>
+    <div class="flex flex-col sm:flex-row items-stretch gap-2 sm:gap-3 w-full sm:w-auto">
+      <button onclick="openItemModal()"
+              class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors">
+        <i class="fas fa-plus mr-2"></i>
+        Add {{ business_config.item_label }}
+      </button>
+      <a href="{{ base_path }}/admin/dashboard"
+         class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded-lg transition-colors text-center">
+        <i class="fas fa-arrow-left mr-2"></i>
+        Dashboard
+      </a>
+    </div>
+  </div>
+
+  <div class="reveal bg-gray-800 border border-gray-700 rounded-xl p-4 sm:p-6 mb-6">
+    <div class="flex justify-between items-center">
+      <h2 class="text-xl sm:text-2xl font-bold">All {{ business_config.item_plural }}</h2>
+      <span class="text-gray-400 text-sm">{{ items|length }} total</span>
+    </div>
+  </div>
+
+  {% if items %}
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+    {% for item in items %}
+    <div class="store-card reveal bg-gray-800 border border-gray-700 rounded-xl overflow-hidden" data-reveal-delay="{{ loop.index0 % 6 }}">
+      <div class="store-card-img-wrap">
+        {% if item.image_url %}
+        <img src="{{ item.image_url }}" alt="{{ item.name }}" loading="lazy" class="store-card-img w-full h-48 object-cover">
+        {% else %}
+        <div class="w-full h-48 bg-gray-700 flex items-center justify-center">
+          <i class="fas fa-image text-gray-500 text-4xl"></i>
+        </div>
+        {% endif %}
+      </div>
+      <div class="p-5">
+        <h3 class="text-lg font-bold mb-2 text-white">{{ item.name }}</h3>
+        <div class="space-y-2 mb-4 text-sm">
+          <div class="flex items-center text-gray-400"><i class="fas fa-barcode mr-2 text-blue-400"></i><span>{{ item.item_code or 'N/A' }}</span></div>
+          <div class="flex items-center text-gray-400"><i class="fas fa-dollar-sign mr-2 text-green-400"></i><span>{% if item.price %}${{ "%.2f"|format(item.price) }}{% else %}<em class="text-yellow-400">Quote required</em>{% endif %}</span></div>
+          <div>
+            <span class="px-2 py-1 rounded text-xs font-semibold {% if item.status == 'Available' %}bg-green-900 text-green-200{% elif item.status == 'Sold' %}bg-red-900 text-red-200{% else %}bg-yellow-900 text-yellow-200{% endif %}">{{ item.status or 'Available' }}</span>
+          </div>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="openItemModal('{{ item._id }}')" class="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg text-sm transition-colors"><i class="fas fa-edit mr-1"></i>Edit</button>
+          <a href="{{ base_path }}/item/{{ item._id }}" class="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white font-semibold rounded-lg text-sm text-center transition-colors"><i class="fas fa-eye mr-1"></i>View</a>
+          <button onclick="deleteItem('{{ item._id }}', '{{ item.name }}')" class="flex-1 px-3 py-2 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg text-sm transition-colors"><i class="fas fa-trash mr-1"></i>Delete</button>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="reveal bg-gray-800 border border-gray-700 rounded-xl p-8 sm:p-12 text-center">
+    <i class="fas fa-box text-6xl text-gray-600 mb-4"></i>
+    <p class="text-xl text-gray-400 mb-2">No {{ business_config.item_plural|lower }} yet</p>
+    <button onclick="openItemModal()" class="mt-4 px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors">
+      <i class="fas fa-plus mr-2"></i>
+      Add Your First {{ business_config.item_label }}
+    </button>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Modal -->
+<div id="itemModal" class="store-modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div class="store-modal-content">
+    <div class="p-5 sm:p-6">
+      <div class="flex justify-between items-center mb-6">
+        <h2 id="modalTitle" class="text-2xl font-bold">Add {{ business_config.item_label }}</h2>
+        <button type="button" onclick="closeItemModal()" class="text-gray-400 hover:text-white text-2xl" aria-label="Close">&times;</button>
+      </div>
+      <form id="itemForm" class="space-y-4">
+        <input type="hidden" id="itemId" name="item_id">
+        <div>
+          <label for="itemName" class="block text-gray-400 text-sm mb-2">{{ business_config.item_label }} Name *</label>
+          <input type="text" id="itemName" name="name" required class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div>
+          <label for="itemCode" class="block text-gray-400 text-sm mb-2">{{ business_config.item_code_label }}</label>
+          <input type="text" id="itemCode" name="item_code" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label for="itemPrice" class="block text-gray-400 text-sm mb-2">Price</label>
+            <input type="number" id="itemPrice" name="price" step="0.01" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+          <div>
+            <label for="itemStatus" class="block text-gray-400 text-sm mb-2">Status</label>
+            <select id="itemStatus" name="status" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+              {% for s in business_config.status_options %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+            </select>
+          </div>
+        </div>
+        <div>
+          <label for="itemCategory" class="block text-gray-400 text-sm mb-2">Category</label>
+          <input type="text" id="itemCategory" name="category" list="categoryOptions" autocomplete="off"
+                 placeholder="Pick one or type a new category"
+                 class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <datalist id="categoryOptions">
+            {% for c in ns.cats %}<option value="{{ c | e }}"></option>{% endfor %}
+          </datalist>
+          <p class="text-xs text-gray-500 mt-1">Groups this {{ business_config.item_label|lower }} in the catalog. Pick an existing category or type a new one.</p>
+        </div>
+        <div>
+          <label class="block text-gray-400 text-sm mb-2">Image</label>
+          <div class="space-y-3">
+            <div class="border-2 border-dashed border-gray-600 rounded-lg p-4 text-center hover:border-gray-500 transition-colors">
+              <input type="file" id="itemImageFile" accept="image/*" class="hidden" onchange="handleImageFileSelect(this)">
+              <label for="itemImageFile" class="cursor-pointer flex flex-col items-center">
+                <i class="fas fa-cloud-upload-alt text-3xl text-gray-400 mb-2"></i>
+                <span class="text-sm text-gray-400">Click to upload</span>
+                <span class="text-xs text-gray-500 mt-1">PNG, JPG, GIF up to 10MB</span>
+              </label>
+            </div>
+            <div id="itemImagePreview" class="hidden">
+              <img id="itemImagePreviewImg" src="" alt="Preview" class="w-full h-48 object-cover rounded-lg mb-2">
+              <button type="button" onclick="clearItemImagePreview()" class="w-full px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg text-sm"><i class="fas fa-times mr-2"></i>Remove</button>
+            </div>
+            <input type="url" id="itemImageUrl" name="image_url" placeholder="Or paste image URL" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <div id="itemImageUploadStatus" class="text-sm"></div>
+          </div>
+        </div>
+        <div>
+          <label for="itemDescription" class="block text-gray-400 text-sm mb-2">Description</label>
+          <textarea id="itemDescription" name="description" rows="4" class="w-full px-4 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+        </div>
+        <div class="flex gap-3 pt-4">
+          <button type="submit" class="store-btn flex-1 px-6 py-2 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors"><i class="fas fa-save mr-2"></i>Save</button>
+          <button type="button" onclick="closeItemModal()" class="flex-1 px-6 py-2 bg-gray-600 hover:bg-gray-500 text-white font-bold rounded-lg transition-colors">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function openItemModal(itemId = null) {
+    const modal = document.getElementById('itemModal');
+    const form = document.getElementById('itemForm');
+    const modalTitle = document.getElementById('modalTitle');
+    if (itemId) {
+      modalTitle.textContent = 'Edit {{ business_config.item_label }}';
+      fetch(`${window.BASE_PATH || ''}/api/items/${itemId}`, { credentials: 'same-origin' })
+        .then(res => res.ok ? res.json() : Promise.reject(new Error('HTTP ' + res.status)))
+        .then(payload => {
+          const it = payload.data || payload;
+          document.getElementById('itemId').value = itemId;
+          document.getElementById('itemName').value = it.name || '';
+          document.getElementById('itemCode').value = it.item_code || '';
+          document.getElementById('itemPrice').value = it.price || '';
+          document.getElementById('itemCategory').value = it.category || '';
+          document.getElementById('itemStatus').value = it.status || 'Available';
+          document.getElementById('itemImageUrl').value = it.image_url || '';
+          document.getElementById('itemDescription').value = it.description || '';
+          if (it.image_url) showItemImagePreview(it.image_url);
+        })
+        .catch(() => alert('Error loading item data'));
+    } else {
+      modalTitle.textContent = 'Add {{ business_config.item_label }}';
+      form.reset();
+      document.getElementById('itemId').value = '';
+      clearItemImagePreview();
+    }
+    modal.classList.add('is-active');
+  }
+
+  function closeItemModal() {
+    document.getElementById('itemModal').classList.remove('is-active');
+  }
+
+  async function handleImageFileSelect(input) {
+    const file = input.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { alert('Please select an image'); input.value = ''; return; }
+    if (file.size > 10 * 1024 * 1024) { alert('Max file size 10MB'); input.value = ''; return; }
+    const statusDiv = document.getElementById('itemImageUploadStatus');
+    statusDiv.innerHTML = '<span class="text-blue-400"><i class="fas fa-spinner fa-spin mr-2"></i>Uploading...</span>';
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('folder', 'items');
+      const res = await fetch((window.BASE_PATH || '') + '/admin/upload-image', { method: 'POST', credentials: 'same-origin', body: fd });
+      const result = await res.json();
+      if (res.ok && result.ok) {
+        document.getElementById('itemImageUrl').value = result.image_url;
+        showItemImagePreview(result.image_url);
+        statusDiv.innerHTML = '<span class="text-green-400"><i class="fas fa-check-circle mr-2"></i>Uploaded!</span>';
+        setTimeout(() => { statusDiv.innerHTML = ''; }, 3000);
+      } else {
+        statusDiv.innerHTML = '<span class="text-red-400"><i class="fas fa-exclamation-circle mr-2"></i>' + (result.detail || 'Upload failed') + '</span>';
+      }
+    } catch (err) {
+      statusDiv.innerHTML = '<span class="text-red-400">Error: ' + err.message + '</span>';
+    }
+  }
+
+  function showItemImagePreview(url) {
+    document.getElementById('itemImagePreviewImg').src = url;
+    document.getElementById('itemImagePreview').classList.remove('hidden');
+  }
+  function clearItemImagePreview() {
+    document.getElementById('itemImagePreview').classList.add('hidden');
+    document.getElementById('itemImagePreviewImg').src = '';
+    document.getElementById('itemImageFile').value = '';
+    document.getElementById('itemImageUrl').value = '';
+  }
+
+  document.getElementById('itemForm').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(this));
+    if (data.price) data.price = parseFloat(data.price);
+    else delete data.price;
+    if (data.category != null) data.category = data.category.trim();
+    const itemId = data.item_id;
+    delete data.item_id;
+    const url = (window.BASE_PATH || '') + (itemId ? `/api/items/${itemId}` : '/api/items');
+    const method = itemId ? 'PATCH' : 'POST';
+    try {
+      const res = await fetch(url, { method, credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || `HTTP ${res.status}`); }
+      closeItemModal();
+      window.location.reload();
+    } catch (err) { alert('Error: ' + err.message); }
+  });
+
+  async function deleteItem(id, name) {
+    if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(`${window.BASE_PATH || ''}/api/items/${id}`, { method: 'DELETE', credentials: 'same-origin' });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.detail || `HTTP ${res.status}`); }
+      window.location.reload();
+    } catch (err) { alert('Error: ' + err.message); }
+  }
+
+  window.addEventListener('click', function (ev) {
+    const modal = document.getElementById('itemModal');
+    if (ev.target === modal) closeItemModal();
+  });
+</script>
+{% endblock %}

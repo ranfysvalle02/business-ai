@@ -1,0 +1,110 @@
+{# =====================================================================
+   JSON-LD structured data helpers. Consumers include this partial and
+   optionally set:
+     jsonld_type   = 'home' | 'item' | 'default'
+   The business `@type` is configurable via `store.schema_type`
+   (default "LocalBusiness"). All output uses `| tojson` for safe escaping.
+   ===================================================================== #}
+{% set _base_url = (request.base_url | string).rstrip('/') if request is defined and request else '' %}
+{% set _jld_type = jsonld_type or 'default' %}
+{% set _site_url = _base_url or '' %}
+{% set _schema_type = store.schema_type or 'LocalBusiness' %}
+{% set _logo_url = store.logo_url or '/static/icons/icon-512x512.png' %}
+{% set _logo_abs = _logo_url if _logo_url.startswith('http') else (_base_url ~ _logo_url) %}
+{% set _hero_img = (slideshow[0].image_url if slideshow and slideshow|length > 0 else None) or store.hero_image_url or _logo_abs %}
+
+{# ---- Socials sameAs list ---- #}
+{% set _same_as = [] %}
+{% if store.socials %}
+  {% for s in store.socials %}{% if s.url %}{% set _ = _same_as.append(s.url) %}{% endif %}{% endfor %}
+{% endif %}
+
+{# ---- LocalBusiness (or configured type) ---- #}
+{% set _business = {
+  '@context': 'https://schema.org',
+  '@type': _schema_type,
+  '@id': (_site_url ~ '/#business') if _site_url else '#business',
+  'name': store.name or 'AI Stores',
+  'description': store.about_text or store.tagline or '',
+  'url': _site_url,
+  'image': _hero_img,
+  'logo': _logo_abs,
+  'telephone': store.phone or '',
+  'email': store.email or '',
+  'priceRange': store.price_range or '$$',
+  'address': { '@type': 'PostalAddress', 'streetAddress': store.address or '' },
+  'sameAs': _same_as,
+  'openingHours': store.hours or ''
+} %}
+<script type="application/ld+json">{{ _business | tojson }}</script>
+
+{# ---- Home: WebSite + ItemList of catalog items ---- #}
+{% if _jld_type == 'home' %}
+  {% set _site = {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    'name': store.name or 'AI Stores',
+    'url': _site_url
+  } %}
+<script type="application/ld+json">{{ _site | tojson }}</script>
+
+  {% if items and items|length > 0 %}
+    {% set _list_elements = [] %}
+    {% for it in items %}
+      {% set _el = {
+        '@type': 'ListItem',
+        'position': loop.index,
+        'url': _site_url ~ '/item/' ~ (it._id | string),
+        'name': it.name or 'Item'
+      } %}
+      {% set _ = _list_elements.append(_el) %}
+    {% endfor %}
+    {% set _list = {
+      '@context': 'https://schema.org',
+      '@type': 'ItemList',
+      'name': (store.name or 'AI Stores') ~ ' — Catalog',
+      'itemListElement': _list_elements
+    } %}
+<script type="application/ld+json">{{ _list | tojson }}</script>
+  {% endif %}
+{% endif %}
+
+{# ---- Item page: Product + Offer + BreadcrumbList ---- #}
+{% if _jld_type == 'item' and item %}
+  {% set _availability_map = {
+    'Available': 'https://schema.org/InStock',
+    'Limited Availability': 'https://schema.org/LimitedAvailability',
+    'Pending': 'https://schema.org/PreOrder',
+    'Sold': 'https://schema.org/SoldOut'
+  } %}
+  {% set _offer = {
+    '@type': 'Offer',
+    'price': item.price or 0,
+    'priceCurrency': store.currency or 'USD',
+    'availability': _availability_map.get(item.status, 'https://schema.org/InStock'),
+    'url': _site_url ~ '/item/' ~ (item._id | string)
+  } %}
+  {% set _product = {
+    '@context': 'https://schema.org',
+    '@type': 'Product',
+    'name': item.name or '',
+    'description': item.description or '',
+    'image': item.image_url or _hero_img,
+    'category': item.category or '',
+    'sku': item.item_code or '',
+    'brand': {'@type': 'Brand', 'name': store.name or 'AI Stores'},
+    'offers': _offer
+  } %}
+<script type="application/ld+json">{{ _product | tojson }}</script>
+
+  {% set _crumbs = {
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    'itemListElement': [
+      {'@type': 'ListItem', 'position': 1, 'name': 'Home',    'item': _site_url ~ '/'},
+      {'@type': 'ListItem', 'position': 2, 'name': 'Catalog', 'item': _site_url ~ '/#catalog'},
+      {'@type': 'ListItem', 'position': 3, 'name': item.name or 'Item', 'item': _site_url ~ '/item/' ~ (item._id | string)}
+    ]
+  } %}
+<script type="application/ld+json">{{ _crumbs | tojson }}</script>
+{% endif %}

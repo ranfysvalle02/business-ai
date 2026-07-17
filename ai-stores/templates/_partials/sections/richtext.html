@@ -1,0 +1,20 @@
+{# Rich text / about section — a free content block managed by the admin.
+   Reads: section.settings.{heading, body, align, background}
+   `body` may contain simple HTML (rendered with |safe). #}
+{% set _s = section.settings or {} %}
+{% set _align = _s.align or 'center' %}
+{% set _bg = 'rgb(var(--store-theme-surface))' if _s.background == 'surface' else 'rgb(var(--store-theme-background))' %}
+<section id="{{ section.anchor or section.key }}" class="py-12 sm:py-20 px-4 sm:px-6"
+         style="background-color: {{ _bg }};">
+  <div class="container mx-auto max-w-3xl text-{{ _align }}">
+    {% if _s.heading %}
+    <h2 class="reveal text-store-text text-2xl sm:text-4xl md:text-5xl font-extrabold mb-6">{{ _s.heading }}</h2>
+    {% endif %}
+    {% if _s.body %}
+    <div class="reveal prose prose-invert max-w-none text-base sm:text-lg leading-relaxed text-store-muted"
+         data-reveal-delay="1">
+      {{ _s.body | safe }}
+    </div>
+    {% endif %}
+  </div>
+</section>

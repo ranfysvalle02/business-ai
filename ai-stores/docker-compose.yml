@@ -1,0 +1,161 @@
+# AI Stores — mdb-engine + MongoDB Atlas Local
+#
+# One instance serves many stores at /{store}; the shared admin adds stores at
+# runtime from /manage (no redeploy). A `demo` store is seeded on first boot.
+#
+# Quick start:
+#   1. cp .env.example .env   (then edit secrets / admin creds)
+#   2. docker compose up --build
+#   3. open http://localhost:8000/manage   (sign in, create stores)
+#
+# Notes:
+#   • `mongodb/mongodb-atlas-local` presents as a single-node replica set.
+#     We pass `?directConnection=true` so the Motor driver talks straight
+#     to the container instead of trying to resolve replset members.
+#   • Healthchecks gate `app` on Atlas Local actually answering `ping`,
+#     not just the process being up.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_PORT: 8000
+    container_name: ai-stores-app
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # ── Database (one Mongo DB holds every store; scopes are {slug}_* collections) ──
+      - MONGODB_URI=mongodb://mongo:27017/?directConnection=true
+      - MDB_DB_NAME=${MDB_DB_NAME:-ai_stores}
+
+      # ── Runtime ──
+      - PORT=8000
+      - HOST=0.0.0.0
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONUNBUFFERED=1
+
+      # ── Admin bootstrap (consumed by manifest.json via {{env.*}}) ──
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@example.com}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-password123}
+
+      # ── mdb-engine secrets / admin plane ──
+      # Generate each with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+      - MDB_ENGINE_MASTER_KEY=${MDB_ENGINE_MASTER_KEY:-change-me-dev-only-please-32chars}
+      - MDB_JWT_SECRET=${MDB_JWT_SECRET:-change-me-dev-only-jwt-secret-32-chars-min}
+
+      # Set to `production` behind TLS so the admin session cookie is marked
+      # `Secure`. Empty by default so local HTTP dev can stay logged in.
+      - G_NOME_ENV=${G_NOME_ENV:-}
+
+      # ── Cloudinary (optional; upload routes return 503 if unset) ──
+      - CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME:-}
+      - CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY:-}
+      - CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET:-}
+
+      # ── Lead notifications (optional; disabled if RESEND_API_KEY unset) ──
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - RESEND_FROM=${RESEND_FROM:-}
+      - NOTIFY_ENABLED=${NOTIFY_ENABLED:-true}
+
+      # ── Abuse protection (per-IP+store inquiries; per-admin AI/uploads) ──
+      - INQUIRY_RATELIMIT_PER_MIN=${INQUIRY_RATELIMIT_PER_MIN:-5}
+      - INQUIRY_RATELIMIT_PER_HOUR=${INQUIRY_RATELIMIT_PER_HOUR:-30}
+      - AI_RATELIMIT_PER_MIN=${AI_RATELIMIT_PER_MIN:-20}
+      - UPLOAD_RATELIMIT_PER_MIN=${UPLOAD_RATELIMIT_PER_MIN:-30}
+
+      # ── Local AI (Ollama) — powers the admin conversational editor ──
+      # Talks to the sibling `ollama` service. The chat routes degrade
+      # gracefully (503) until a model is pulled: `make ai-pull`.
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b-instruct}
+    volumes:
+      - ./static:/app/static:ro
+      - ./templates:/app/templates:ro
+      - ./manifest.json:/app/manifest.json:ro
+      - ./store_template.json:/app/store_template.json:ro
+    depends_on:
+      mongo:
+        condition: service_healthy
+      # AI is an optional feature; don't block the storefront on it.
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/__mdb/health/live', timeout=3).status==200 else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    networks:
+      - ai-stores
+
+  mongo:
+    image: mongodb/mongodb-atlas-local:latest
+    container_name: ai-stores-mongo
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongo-data:/data/db
+      - mongo-config:/data/configdb
+    environment:
+      # Atlas Local bootstraps a single-node replica set automatically.
+      # These are optional (root user); unset them to run fully anonymous.
+      - MONGODB_INITDB_ROOT_USERNAME=${MONGODB_INITDB_ROOT_USERNAME:-}
+      - MONGODB_INITDB_ROOT_PASSWORD=${MONGODB_INITDB_ROOT_PASSWORD:-}
+    healthcheck:
+      # Atlas Local ships `mongosh`. Wait until the single-node replica set has
+      # actually elected a writable PRIMARY — not just answering ping — so the
+      # app never starts into a transient NotPrimary error during RS election.
+      test:
+        - CMD-SHELL
+        - |
+          mongosh --quiet --host 127.0.0.1 --port 27017 \
+            --eval "db.hello().isWritablePrimary" | grep -q true
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - ai-stores
+
+  ollama:
+    # Local, self-hosted LLM runtime for the conversational store editor.
+    # No external API keys. Pull a model once after `up`: `make ai-pull`.
+    image: ollama/ollama:latest
+    container_name: ai-stores-ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      # `ollama list` exits 0 once the server is answering.
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - ai-stores
+
+volumes:
+  mongo-data:
+    driver: local
+  mongo-config:
+    driver: local
+  ollama-models:
+    driver: local
+
+networks:
+  ai-stores:
+    driver: bridge

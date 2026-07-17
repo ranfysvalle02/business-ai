@@ -1,0 +1,8 @@
+# AI Stores — test/dev dependencies (installed on top of requirements.txt).
+# Pinned for deterministic CI. The in-process test harness drives the real
+# ASGI app (engine lifespan + _bootstrap_stores) against a live Atlas Local.
+-r requirements.txt
+
+pytest==7.4.4
+pytest-asyncio==0.21.2
+asgi-lifespan==2.1.0
