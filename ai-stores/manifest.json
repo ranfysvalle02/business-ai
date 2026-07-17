@@ -19,6 +19,7 @@
       "/contact",
       "/contact/thanks",
       "/api/submit-inquiry",
+      "/signup",
       "/auth/login",
       "/auth/logout",
       "/static/*",
@@ -235,7 +236,7 @@
       "auto_crud": true,
       "timestamps": true,
       "auth": {
-        "roles": ["admin"],
+        "roles": ["admin", "viewer"],
         "write_roles": ["admin"],
         "create_roles": ["admin"]
       },

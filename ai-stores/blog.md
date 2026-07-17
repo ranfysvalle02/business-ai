@@ -16,13 +16,18 @@ reconcile to a known-good store every time.
 > the admin *confirms*. See
 > ["The conversational editor"](#the-conversational-editor-propose-validate-confirm).
 
-> **Update:** AI Stores is now **multi-tenant**. One app instance serves many
-> stores at `stores.com/{store}`, managed by one shared admin, with each store's
-> data isolated in its own `{slug}_*` collections. A store is a per-request
-> *scope*, created at runtime from `/manage` — no redeploy. The "data, not code"
-> and "propose → validate → confirm" ethos below is unchanged; only the scope of
-> "a store" moved from *one per deploy* to *one per request*. See
-> [`SCALE.md`](SCALE.md) and [`README.md`](README.md) for the architecture.
+> **Update:** AI Stores is now **multi-tenant with per-user namespaces**. One app
+> instance serves many stores at `stores.com/{handle}/{store}`: a user claims a
+> **handle** (their namespace) and owns every store under it, with
+> `owner`/`editor`/`viewer` teammates. Each store's data is isolated in its own
+> `{handle}__{store}_*` collections; a store is a per-request *scope*, created at
+> runtime from `/manage` or the public `/signup` — no redeploy. Identity stays
+> global (one `users` pool + cookie); authorization is layered **per namespace**
+> by an effective-role overlay ([`rbac.py`](rbac.py)), and the seeded
+> `ADMIN_EMAIL` is a platform superuser. The "data, not code" and "propose →
+> validate → confirm" ethos below is unchanged; only the scope of "a store" moved
+> from *one per deploy* to *one per request*, now grouped under a user's handle.
+> See [`SCALE.md`](SCALE.md) and [`README.md`](README.md) for the architecture.
 
 ---
 

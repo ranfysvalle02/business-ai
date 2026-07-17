@@ -1,11 +1,18 @@
 """
-AI Stores — a multi-tenant shell over ``mdb-engine``.
+AI Stores — a multi-tenant shell over ``mdb-engine`` with per-user namespaces.
 
-One app instance serves **many stores** from a single entrypoint at
-``stores.com/{store}``, administered by **one shared admin**. A store is just
-a per-request database *scope*: the engine prefixes every collection with it
-(``{slug}_items``) and tags documents with an ``app_id``, so stores are fully
-isolated while sharing one deployment and one Mongo database.
+One app instance serves **many stores** from a single entrypoint. A user
+claims a **handle** (their namespace) and owns every store under it at
+``stores.com/{handle}/{store}``. Each store is a per-request database *scope*
+``{handle}__{store}``: the engine prefixes every collection with it
+(``{handle}__{store}_items``) and tags documents with an ``app_id``, so stores
+are fully isolated while sharing one deployment and one Mongo database.
+
+Identity stays **global** (one ``mdb-engine`` ``users`` pool + session cookie);
+authorization is layered **per namespace** on top — owner/editor/viewer roles
+in ``namespace_members`` are mapped to the engine's effective ``user_roles`` by
+``StoreRoleOverlayMiddleware`` (see ``rbac.py``). The seeded ``ADMIN_EMAIL`` is
+the platform superuser with access to every namespace.
 
 Everything about the domain (collections, auto-CRUD, auth, SSR routes,
 indexes, admin plane, reconciler, trash sweeper) is declared in
@@ -14,17 +21,21 @@ indexes, admin plane, reconciler, trash sweeper) is declared in
 This module keeps only what does not belong in the manifest:
 
     * ``StoreScopeMiddleware`` + a ``get_scoped_db`` override that resolve
-      ``/{store}/...`` to the right scope per request (auth stays global).
+      ``/{handle}/{store}/...`` to the right scope per request.
+    * ``StoreRoleOverlayMiddleware`` that applies per-namespace RBAC without
+      forking the engine's global auth.
     * Runtime store provisioning (``provision_store``) and a ``store_registry``
-      held in the platform scope, plus the ``/manage`` console to create and
-      open stores — no redeploy needed to add a store.
+      held in the platform scope, plus the role-aware ``/manage`` console and
+      ``/{handle}/`` landing — no redeploy needed to add a store.
+    * Namespace team management (owner-gated invites) and public self-serve
+      ``/signup`` to claim a handle and open a first store.
     * Static asset mount for ``/static`` (PWA icons, service worker, css/js).
     * SSR route mounting (reads the manifest ``ssr`` block).
     * A public ``POST /api/submit-inquiry`` endpoint so unauthenticated
       visitors can submit leads without opening the ``inquiries`` collection
       to anonymous writes.
     * Cloudinary-backed ``POST /admin/upload-image`` / ``/admin/upload-video``
-      endpoints gated to the ``admin`` role.
+      endpoints gated to a store's owner/editor (or the platform superuser).
 """
 from __future__ import annotations
 
@@ -47,15 +58,21 @@ from fastapi import BackgroundTasks, Depends, File, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from mdb_engine import get_current_user, quickstart
+from mdb_engine.auth.jwt import decode_jwt_token, encode_jwt_token
 from mdb_engine.auth.rate_limiter import RateLimit, create_rate_limit_store
-from mdb_engine.dependencies import get_scoped_db
+from mdb_engine.auth.users import create_app_user
+from mdb_engine.dependencies import get_scoped_db, get_user_roles
+from mdb_engine.env import get_jwt_secret
 from mdb_engine.indexes import run_index_creation_for_collection
 from mdb_engine.routing._ssr import mount_ssr_routes
 
 import ai_editor
 import notifications
+import rbac
 
 load_dotenv()
 
@@ -96,17 +113,38 @@ _STORE_TEMPLATE: dict[str, list[dict[str, Any]]] = json.loads(STORE_TEMPLATE_PAT
 # ``specials``, ``slideshow`` and ``inquiries``.
 PLATFORM_SLUG: str = _manifest_data["slug"]
 
-# First path segments that are global — never a store, never scoped.
+# First path segments that are global — never a namespace, never scoped.
 RESERVED_SEGMENTS = frozenset(
-    {"static", "__mdb", "health", "favicon.ico", "robots.txt", "auth", "manage"}
+    {"static", "__mdb", "health", "favicon.ico", "robots.txt", "auth", "manage", "signup"}
 )
-# Slugs that would collide with a global or storefront route's first segment,
-# or with the platform scope's own ``{PLATFORM_SLUG}_*`` collections.
+# Slugs that would collide with a global route's first segment (handles), or
+# with a store's own sub-paths (stores), or with the platform scope's own
+# ``{PLATFORM_SLUG}_*`` collections. Reused for both handles and store slugs.
 BANNED_SLUGS = RESERVED_SEGMENTS | frozenset(
-    {"admin", "api", "item", "contact", "sitemap.xml", "sitemap", "www", PLATFORM_SLUG}
+    {"admin", "api", "item", "contact", "sitemap.xml", "sitemap", "www", "invite", PLATFORM_SLUG}
 )
-# 3–40 chars, lowercase alnum + hyphen, no leading/trailing hyphen.
+# 3–40 chars, lowercase alnum + hyphen, no leading/trailing hyphen. Because a
+# validated slug never contains ``_``, the ``__`` scope join below is always an
+# unambiguous, reversible separator between a handle and a store slug.
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
+
+# Physical engine scope for a store = ``{handle}__{store}`` (double-underscore
+# join). One Mongo database holds every store; the engine prefixes each
+# collection with this scope (``{handle}__{store}_items``).
+_SCOPE_SEP = "__"
+
+
+def scope_id(handle: str, store: str) -> str:
+    """Composite engine scope for a (handle, store) pair."""
+    return f"{handle}{_SCOPE_SEP}{store}"
+
+
+def split_scope(scope: str) -> tuple[str, str] | None:
+    """Reverse ``scope_id`` → ``(handle, store)``; ``None`` if not a store scope."""
+    parts = scope.split(_SCOPE_SEP)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return None
+    return parts[0], parts[1]
 
 # ── Store lifecycle status ─────────────────────────────────────────────
 #
@@ -119,19 +157,30 @@ STORE_STATUS_ARCHIVED = "archived"
 STORE_STATUS_FAILED = "failed"
 STORE_STATUS_DELETING = "deleting"
 
-# Provisioned store slugs (status=ready), rebuilt from the registry at startup,
-# on every lifecycle mutation, on a short TTL, and on registry change-stream
-# events so multi-worker deployments converge. On a cache miss the middleware
-# still falls back to a status-aware registry lookup.
+# Routing caches, rebuilt from the registry at startup, on every lifecycle
+# mutation, on a short TTL, and on registry change-stream events so
+# multi-worker deployments converge. On a cache miss the middleware still
+# falls back to a status-aware registry lookup.
+#   * ``KNOWN_HANDLES`` — every handle that owns at least one routable store.
+#   * ``KNOWN_STORES``  — composite ``{handle}__{store}`` scope ids (status=ready).
+KNOWN_HANDLES: set[str] = set()
 KNOWN_STORES: set[str] = set()
 
-_STORE_404_HTML = (
-    "<!doctype html><meta charset='utf-8'><title>Store not found</title>"
-    "<div style=\"font-family:system-ui;max-width:32rem;margin:12vh auto;"
-    "text-align:center;background:#0b1120;color:#e2e8f0;padding:2rem 1.5rem;"
-    "border-radius:12px\"><h1 style='font-size:1.5rem;margin:0 0 .5rem'>"
-    "Store not found</h1><p style='color:#94a3b8;margin:0'>No store is "
-    "published at this address.</p></div>"
+def _not_found_html(title: str, message: str) -> str:
+    return (
+        f"<!doctype html><meta charset='utf-8'><title>{title}</title>"
+        "<div style=\"font-family:system-ui;max-width:32rem;margin:12vh auto;"
+        "text-align:center;background:#0b1120;color:#e2e8f0;padding:2rem 1.5rem;"
+        f"border-radius:12px\"><h1 style='font-size:1.5rem;margin:0 0 .5rem'>"
+        f"{title}</h1><p style='color:#94a3b8;margin:0'>{message}</p></div>"
+    )
+
+
+_STORE_404_HTML = _not_found_html(
+    "Store not found", "No store is published at this address."
+)
+_HANDLE_404_HTML = _not_found_html(
+    "Namespace not found", "No one has claimed this namespace."
 )
 
 app = quickstart(
@@ -187,28 +236,34 @@ def _routable_status_query() -> dict[str, Any]:
 
 
 async def refresh_known_stores() -> set[str]:
-    """Rebuild ``KNOWN_STORES`` from the registry (ready stores only).
+    """Rebuild ``KNOWN_HANDLES`` + ``KNOWN_STORES`` from the registry (ready only).
 
-    Reassigns the module-level set atomically so in-flight requests always
-    read a complete snapshot. Returns the new set (handy in tests). Never
-    raises — a refresh error leaves the previous cache in place.
+    Reassigns the module-level sets atomically so in-flight requests always
+    read a complete snapshot. Returns the new store-scope set (handy in tests).
+    Never raises — a refresh error leaves the previous caches in place.
     """
-    global KNOWN_STORES
+    global KNOWN_HANDLES, KNOWN_STORES
     try:
         reg = await _platform_db(app.state.engine)
-        fresh: set[str] = set()
-        async for doc in reg["store_registry"].find(_routable_status_query(), {"slug": 1}):
-            if doc.get("slug"):
-                fresh.add(doc["slug"])
-        KNOWN_STORES = fresh
-        return fresh
+        handles: set[str] = set()
+        stores: set[str] = set()
+        async for doc in reg["store_registry"].find(
+            _routable_status_query(), {"handle": 1, "store": 1}
+        ):
+            handle, store = doc.get("handle"), doc.get("store")
+            if handle and store:
+                handles.add(handle)
+                stores.add(scope_id(handle, store))
+        KNOWN_HANDLES = handles
+        KNOWN_STORES = stores
+        return stores
     except Exception as exc:  # noqa: BLE001 — never crash on a refresh error
-        logger.warning(f"KNOWN_STORES refresh skipped: {exc}")
+        logger.warning(f"store cache refresh skipped: {exc}")
         return KNOWN_STORES
 
 
-async def _store_is_registered(slug: str) -> bool:
-    """Status-aware registry lookup used on an in-memory cache miss.
+async def _store_is_registered(handle: str, store: str) -> bool:
+    """Status-aware registry lookup for a (handle, store) on a cache miss.
 
     Only ``ready`` (or legacy status-less) stores route; ``archived``,
     ``deleting``, ``provisioning`` and ``failed`` stores return ``False`` so
@@ -216,21 +271,48 @@ async def _store_is_registered(slug: str) -> bool:
     """
     try:
         reg = await _platform_db(app.state.engine)
-        return await reg["store_registry"].find_one({"slug": slug, **_routable_status_query()}) is not None
+        found = await reg["store_registry"].find_one(
+            {"handle": handle, "store": store, **_routable_status_query()}
+        )
+        return found is not None
+    except Exception:  # noqa: BLE001 — never fail a request on a lookup error
+        return False
+
+
+async def _handle_is_registered(handle: str) -> bool:
+    """Whether a handle owns at least one routable store (cache-miss fallback)."""
+    try:
+        reg = await _platform_db(app.state.engine)
+        found = await reg["store_registry"].find_one(
+            {"handle": handle, **_routable_status_query()}
+        )
+        return found is not None
     except Exception:  # noqa: BLE001 — never fail a request on a lookup error
         return False
 
 
 class StoreScopeMiddleware:
-    """Resolve ``/{store}/...`` to a per-request database scope.
+    """Resolve ``/{handle}/{store}/...`` to a per-request database scope.
 
     Added after ``quickstart`` so it is the outermost middleware — it runs
     before the engine's auth middleware and the router. For a known store it
-    sets ``root_path`` to the ``/{store}`` prefix: Starlette then routes on the
-    remaining path (``get_route_path``) so the engine's existing routes match
-    unchanged, while ``request.url`` / ``base_url`` keep the prefix so canonical
-    URLs, sitemaps and OG tags stay per-store correct. Auth is untouched — it
-    is enforced by SSR ``auth`` flags and ``require_user`` deps, not by path.
+    sets ``root_path`` to the ``/{handle}/{store}`` prefix: Starlette then
+    routes on the remaining path (``get_route_path``) so the engine's existing
+    routes match unchanged, while ``request.url`` / ``base_url`` keep the prefix
+    so canonical URLs, sitemaps and OG tags stay per-store correct.
+
+    Routing decisions on the first two path segments:
+      * reserved 1st segment (``manage``, ``auth``, ``static``, ``signup``, …)
+        → platform scope (no rewrite).
+      * unknown handle → 404.
+      * known handle, no store segment → the ``/{handle}/`` namespace landing,
+        served by rewriting the path to the platform route ``/manage/ns/{handle}``.
+      * unknown store within a known handle → 404.
+      * known ``(handle, store)`` → scope the request to ``{handle}__{store}``.
+
+    Auth is untouched here — global identity is resolved by the engine's auth
+    middleware; per-namespace authorization is layered on by
+    ``StoreRoleOverlayMiddleware`` (which runs after auth).
     """
 
     def __init__(self, app):
@@ -243,31 +325,57 @@ class StoreScopeMiddleware:
 
         raw_path = scope.get("path") or "/"
 
-        # Bare root → visitors land on a store; admins can head to /manage.
+        # Bare root → the management console (sign in / sign up from there).
         if raw_path == "/":
-            target = ("/" + sorted(KNOWN_STORES)[0] + "/") if KNOWN_STORES else "/manage"
-            await self._send_redirect(send, target)
+            await self._send_redirect(send, "/manage")
             return
 
-        seg = raw_path.lstrip("/").split("/", 1)[0]
+        segments = raw_path.lstrip("/").split("/")
+        handle = segments[0]
 
-        # Global, un-scoped surfaces (static, auth, manage, health, …).
-        if not seg or seg in RESERVED_SEGMENTS:
+        # Global, un-scoped surfaces (static, auth, manage, signup, health, …).
+        if not handle or handle in RESERVED_SEGMENTS:
             await self.app(scope, receive, send)
             return
 
-        # Everything else must be a store. Fall back to the registry on a miss.
-        if seg not in KNOWN_STORES:
-            if not await _store_is_registered(seg):
+        # First segment must be a known handle (namespace). Fall back to the
+        # registry on a cache miss so every worker converges.
+        if handle not in KNOWN_HANDLES:
+            if not await _handle_is_registered(handle):
+                await self._send_html(send, 404, _HANDLE_404_HTML)
+                return
+            KNOWN_HANDLES.add(handle)
+
+        store = segments[1] if len(segments) > 1 else ""
+
+        # ``/{handle}`` or ``/{handle}/`` → public namespace landing. Rewrite to
+        # a platform route so it is served without a store scope. GET-only.
+        if store == "":
+            if scope.get("method", "GET").upper() != "GET":
+                await self._send_html(send, 404, _HANDLE_404_HTML)
+                return
+            landing = f"/manage/ns/{handle}"
+            scope["path"] = landing
+            scope["raw_path"] = landing.encode("utf-8")
+            await self.app(scope, receive, send)
+            return
+
+        # Second segment must be a known store within this handle.
+        composite = scope_id(handle, store)
+        if composite not in KNOWN_STORES:
+            if not await _store_is_registered(handle, store):
                 await self._send_html(send, 404, _STORE_404_HTML)
                 return
-            KNOWN_STORES.add(seg)
+            KNOWN_STORES.add(composite)
 
         # Scope this request to the store.
-        scope["store_slug"] = seg
-        scope["root_path"] = scope.get("root_path", "") + "/" + seg
-        if raw_path[len(seg) + 1:] == "":
-            # "/x" → "/x/" so get_route_path() yields "/" for the home route.
+        prefix = f"/{handle}/{store}"
+        scope["handle"] = handle
+        scope["store"] = store
+        scope["store_slug"] = composite
+        scope["root_path"] = scope.get("root_path", "") + prefix
+        if raw_path[len(prefix):] == "":
+            # "/h/s" → "/h/s/" so get_route_path() yields "/" for the home route.
             scope["path"] = raw_path + "/"
             scope["raw_path"] = (raw_path + "/").encode("utf-8")
 
@@ -297,6 +405,71 @@ class StoreScopeMiddleware:
 
 
 app.add_middleware(StoreScopeMiddleware)
+
+
+class StoreRoleOverlayMiddleware(BaseHTTPMiddleware):
+    """Layer per-namespace authorization onto the engine's global identity.
+
+    Runs **after** the engine's auth middleware (installed as the innermost
+    middleware, see below), so ``request.state.user`` is already resolved. For
+    a store-scoped request it:
+
+      * **always** rewrites ``request.state.user_roles`` from the caller's
+        membership of ``scope["handle"]`` (this alone gates ``/api`` writes,
+        since ``public_read`` GETs never consult roles); and
+      * hard-blocks **admin-surface** paths (``/admin*`` under the store) for
+        non-members by nulling ``request.state.user`` so the engine's SSR
+        ``auth: true`` gate and the app's admin endpoints return 401/403.
+
+    Public storefront paths are never restricted: an anonymous or logged-in
+    non-member can always browse ``/{handle}/{store}/`` and submit inquiries.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        scope = request.scope
+        handle = scope.get("handle")
+        if not handle:
+            # Platform / non-store request (/manage, /auth, /signup, static, …).
+            return await call_next(request)
+
+        user = getattr(request.state, "user", None)
+
+        # Anonymous visitors: no admin, and no membership lookup needed. Public
+        # reads + the public submit-inquiry endpoint are unaffected.
+        if user is None:
+            request.state.user_roles = []
+            return await call_next(request)
+
+        superuser = rbac.is_platform_superuser(user)
+        ns_role: str | None = None
+        if not superuser:
+            try:
+                pdb = await _platform_db(request.app.state.engine)
+                ns_role = await rbac.get_namespace_role(
+                    pdb["namespace_members"], handle, user.get("email")
+                )
+            except Exception:  # noqa: BLE001 — a lookup error must never grant access
+                ns_role = None
+
+        roles = rbac.effective_engine_roles(ns_role, is_superuser=superuser)
+        request.state.user_roles = roles
+
+        # Admin surface = the sub-path after the /{handle}/{store} prefix begins
+        # with /admin. Only there do we hard-block a logged-in non-member.
+        root = scope.get("root_path", "")
+        remainder = (scope.get("path", "") or "")[len(root):] or "/"
+        if remainder.startswith("/admin") and not roles:
+            request.state.user = None
+
+        return await call_next(request)
+
+
+# Append (not add_middleware) so the overlay is the INNERMOST middleware: it
+# runs last on ingress, after the engine's AppUserSessionMiddleware has set
+# request.state.user, while StoreScopeMiddleware (outermost) has already set
+# scope["handle"]. Rebuild the stack now that both are registered.
+app.user_middleware.append(Middleware(StoreRoleOverlayMiddleware))
+app.middleware_stack = app.build_middleware_stack()
 
 
 # ── Per-request scope override ─────────────────────────────────────────
@@ -368,13 +541,13 @@ async def _seed_by_key(db, collection_name: str, key_field: str, docs: list[dict
 # ── Store provisioning ─────────────────────────────────────────────────
 
 
-async def _ensure_store_indexes(engine, slug: str) -> None:
+async def _ensure_store_indexes(engine, scope: str) -> None:
     """Create a store scope's managed indexes via the public engine API.
 
     Driven entirely by the manifest's ``managed_indexes`` (including the unique
     constraints on ``stores.slug_id``, ``sections.key`` and ``items.item_code``),
     applied per store scope with ``run_index_creation_for_collection`` against
-    the raw database using scoped ``{slug}_{collection}`` names. No private
+    the raw database using scoped ``{scope}_{collection}`` names. No private
     engine internals are touched, so this stays stable across engine upgrades.
     The per-doc ``app_id`` index is auto-ensured by the engine on first access.
     """
@@ -384,7 +557,7 @@ async def _ensure_store_indexes(engine, slug: str) -> None:
     try:
         raw_db = engine.connection_manager.mongo_db
     except Exception as exc:  # noqa: BLE001 — no raw handle → skip (best-effort)
-        logger.warning(f"[{slug}] index creation skipped (no db handle): {exc}")
+        logger.warning(f"[{scope}] index creation skipped (no db handle): {exc}")
         return
     for col_name, index_defs in managed.items():
         if not index_defs:
@@ -392,58 +565,73 @@ async def _ensure_store_indexes(engine, slug: str) -> None:
         try:
             await run_index_creation_for_collection(
                 db=raw_db,
-                slug=slug,
-                collection_name=f"{slug}_{col_name}",
+                slug=scope,
+                collection_name=f"{scope}_{col_name}",
                 index_definitions=index_defs,
             )
         except Exception as exc:  # noqa: BLE001 — one bad collection never blocks the rest
-            logger.warning(f"[{slug}] index creation for '{col_name}' skipped: {exc}")
+            logger.warning(f"[{scope}] index creation for '{col_name}' skipped: {exc}")
 
 
 def _validate_slug(slug: str) -> str:
-    """Normalise + validate a store slug, or raise ``ValueError``."""
+    """Normalise + validate a handle or store slug, or raise ``ValueError``.
+
+    Used for both the namespace handle (first path segment) and the store slug
+    (second segment). Because a validated slug never contains ``_``, the two
+    compose unambiguously into the ``{handle}__{store}`` engine scope.
+    """
     slug = (slug or "").strip().lower()
     if not _SLUG_RE.match(slug):
         raise ValueError(
-            "Store address must be 3–40 characters: lowercase letters, numbers and hyphens."
+            "Address must be 3–40 characters: lowercase letters, numbers and hyphens."
         )
     if slug in BANNED_SLUGS:
-        raise ValueError(f"'{slug}' is reserved and can't be used as a store address.")
+        raise ValueError(f"'{slug}' is reserved and can't be used as an address.")
     return slug
 
 
-async def provision_store(engine, slug: str, name: str) -> dict[str, str]:
+async def provision_store(
+    engine, handle: str, store: str, name: str = "", owner_email: str | None = None
+) -> dict[str, str]:
     """Create a store scope end to end: register → indexes → seed → mark ready.
 
-    Idempotent and step-logged. The registry row is written **first** with
-    ``status="provisioning"`` so the store is observable before its
-    collections exist. If seeding fails mid-way the row stays
-    ``provisioning`` — never leaving orphan ``{slug}_*`` collections
-    unaccounted for — and the reconciler (or a plain re-run) can finish it
-    safely: seeding is additive by key and index creation is idempotent, so
-    retries never clobber admin edits.
+    A store lives under a namespace ``handle`` at ``/{handle}/{store}`` and maps
+    to the engine scope ``{handle}__{store}``. Idempotent and step-logged: the
+    registry row is written **first** with ``status="provisioning"`` so the
+    store is observable before its collections exist. If seeding fails mid-way
+    the row stays ``provisioning`` — never leaving orphan ``{scope}_*``
+    collections unaccounted for — and the reconciler (or a plain re-run) can
+    finish it safely, since seeding is additive by key and index creation is
+    idempotent.
     """
-    slug = _validate_slug(slug)
-    name = (name or "").strip() or slug
+    handle = _validate_slug(handle)
+    store = _validate_slug(store)
+    scope = scope_id(handle, store)
+    name = (name or "").strip() or store
     now = datetime.now(timezone.utc)
 
     reg = await _platform_db(engine)
+    set_fields: dict[str, Any] = {
+        "name": name,
+        "status": STORE_STATUS_PROVISIONING,
+        "scope": scope,
+        "updated_at": now,
+    }
+    if owner_email:
+        set_fields["owner_email"] = owner_email.strip().lower()
     await reg["store_registry"].update_one(
-        {"slug": slug},
-        {
-            "$set": {"name": name, "status": STORE_STATUS_PROVISIONING, "updated_at": now},
-            "$setOnInsert": {"slug": slug, "created_at": now},
-        },
+        {"handle": handle, "store": store},
+        {"$set": set_fields, "$setOnInsert": {"handle": handle, "store": store, "created_at": now}},
         upsert=True,
     )
 
-    db = await engine.get_scoped_db(slug)
-    await _ensure_store_indexes(engine, slug)
+    db = await engine.get_scoped_db(scope)
+    await _ensure_store_indexes(engine, scope)
 
     template = copy.deepcopy(_STORE_TEMPLATE)
     stores = template.get("stores") or [{}]
     stores[0]["name"] = name
-    stores[0]["slug_id"] = slug
+    stores[0]["slug_id"] = store
     await _seed_singleton(db, "stores", stores)
     await _seed_by_key(db, "sections", "key", template.get("sections", []))
     await _seed_by_key(db, "items", "item_code", template.get("items", []))
@@ -451,12 +639,13 @@ async def provision_store(engine, slug: str, name: str) -> dict[str, str]:
     await _seed_singleton(db, "slideshow", template.get("slideshow", []))
 
     await reg["store_registry"].update_one(
-        {"slug": slug},
+        {"handle": handle, "store": store},
         {"$set": {"status": STORE_STATUS_READY, "updated_at": datetime.now(timezone.utc)}},
     )
-    KNOWN_STORES.add(slug)
-    logger.info(f"Provisioned store '{slug}' ({name})")
-    return {"slug": slug, "name": name}
+    KNOWN_HANDLES.add(handle)
+    KNOWN_STORES.add(scope)
+    logger.info(f"Provisioned store '{scope}' ({name})")
+    return {"handle": handle, "store": store, "scope": scope, "name": name}
 
 
 # ── Registry indexes, deprovisioning & reconciliation ──────────────────
@@ -467,34 +656,69 @@ def _registry_collection(engine):
     return engine.connection_manager.mongo_db[f"{PLATFORM_SLUG}_store_registry"]
 
 
+def _members_collection(engine):
+    """Raw Motor handle for the physical ``{PLATFORM_SLUG}_namespace_members``."""
+    return engine.connection_manager.mongo_db[f"{PLATFORM_SLUG}_namespace_members"]
+
+
+async def _cleanup_namespace_if_empty(engine, handle: str) -> bool:
+    """Drop a handle's memberships once it owns no stores at all.
+
+    Memberships are namespace-level, so they survive deleting *a* store; they
+    are only cleaned up when the handle's **last** store is removed. Also drops
+    the handle from ``KNOWN_HANDLES``. Returns ``True`` when cleanup ran.
+    """
+    reg = await _platform_db(engine)
+    remaining = await reg["store_registry"].find_one({"handle": handle}, {"_id": 1})
+    if remaining is not None:
+        return False
+    KNOWN_HANDLES.discard(handle)
+    with contextlib.suppress(Exception):
+        await _members_collection(engine).delete_many({"handle": handle})
+    return True
+
+
 async def _ensure_registry_indexes(engine) -> None:
-    """Best-effort unique+status indexes on the store registry collection."""
+    """Best-effort indexes on the registry + namespace-members collections."""
     try:
         col = _registry_collection(engine)
     except Exception as exc:  # noqa: BLE001 — no raw handle → skip
         logger.warning(f"registry index creation skipped (no db handle): {exc}")
         return
     try:
-        await col.create_index("slug", unique=True, name="store_registry_slug_unique")
+        await col.create_index(
+            [("handle", 1), ("store", 1)], unique=True, name="store_registry_handle_store_unique"
+        )
+        await col.create_index("scope", unique=True, sparse=True, name="store_registry_scope_unique")
+        await col.create_index("handle", name="store_registry_handle")
         await col.create_index("status", name="store_registry_status")
     except Exception as exc:  # noqa: BLE001 — never block boot on index creation
         logger.warning(f"registry index creation skipped: {exc}")
+    try:
+        members = _members_collection(engine)
+        await members.create_index(
+            [("handle", 1), ("email", 1)], unique=True, name="ns_member_handle_email_unique"
+        )
+        await members.create_index("email", name="ns_member_email")
+    except Exception as exc:  # noqa: BLE001 — never block boot on index creation
+        logger.warning(f"namespace_members index creation skipped: {exc}")
 
 
-async def _drop_store_collections(engine, slug: str) -> list[str]:
-    """Drop every physical ``{slug}_*`` collection. Returns dropped names.
+async def _drop_store_collections(engine, scope: str) -> list[str]:
+    """Drop every physical ``{scope}_*`` collection. Returns dropped names.
 
-    The trailing underscore in the prefix makes this exact: validated slugs
-    never contain ``_``, so ``acme_`` matches ``acme_items`` but never
-    ``acme2_items`` or the platform's ``{PLATFORM_SLUG}_*`` collections.
+    The trailing underscore in the prefix makes this exact: validated handles
+    and stores never contain ``_``, so ``acme__shop_`` matches ``acme__shop_items``
+    but never ``acme__shopping_items`` or the platform's ``{PLATFORM_SLUG}_*``
+    collections.
 
-    The ``{slug}_stores`` singleton is dropped **last** on purpose: it is the
+    The ``{scope}_stores`` singleton is dropped **last** on purpose: it is the
     marker the orphan scan keys on, so if the process dies mid-drop the
     leftover collections remain detectable (and re-cleanable) as an orphan.
     """
     raw_db = engine.connection_manager.mongo_db
-    prefix = f"{slug}_"
-    stores_name = f"{slug}_stores"
+    prefix = f"{scope}_"
+    stores_name = f"{scope}_stores"
     names = [n for n in await raw_db.list_collection_names() if n.startswith(prefix)]
     names.sort(key=lambda n: n == stores_name)  # False (0) before True (1) → stores last
     dropped: list[str] = []
@@ -508,47 +732,56 @@ async def _drop_store_collections(engine, slug: str) -> list[str]:
 
 
 async def _audit_store_event(
-    engine, event: str, slug: str, actor: dict[str, Any] | None = None, **extra: Any
+    engine,
+    event: str,
+    handle: str,
+    store: str | None = None,
+    actor: dict[str, Any] | None = None,
+    **extra: Any,
 ) -> None:
-    """Best-effort platform-scope audit entry for a store lifecycle action.
+    """Best-effort platform-scope audit entry for a lifecycle/team action.
 
     Writes to the platform ``audit_log`` so there is an operational trail of
-    who did what (created/renamed/archived/restored/deleted) and when. Never
-    raises — an audit write must never fail the operation it records.
+    who did what (created/renamed/archived/restored/deleted, team changes) and
+    when. Never raises — an audit write must never fail the operation it records.
     """
     try:
         reg = await _platform_db(engine)
         doc: dict[str, Any] = {
             "event": event,
-            "slug": slug,
+            "handle": handle,
+            "store": store,
+            "scope": scope_id(handle, store) if store else handle,
             "actor": (actor or {}).get("email") or (actor or {}).get("role") or "system",
             "timestamp": datetime.now(timezone.utc),
         }
         doc.update(extra)
         await reg["audit_log"].insert_one(doc)
     except Exception as exc:  # noqa: BLE001 — audit is best-effort
-        logger.debug(f"store audit '{event}' for '{slug}' skipped: {exc}")
+        logger.debug(f"audit '{event}' for '{handle}/{store}' skipped: {exc}")
 
 
-async def _find_orphan_slugs(engine, reg) -> list[str]:
-    """Slugs that own a ``{slug}_stores`` collection but have no registry row.
+async def _find_orphan_scopes(engine, reg) -> list[str]:
+    """Store scopes that own a ``{scope}_stores`` collection but no registry row.
 
-    Every real store owns a ``{slug}_stores`` singleton, so that collection is
-    the reliable marker of a store slug (platform/engine collections such as
-    ``apps_config`` or ``{PLATFORM_SLUG}_store_registry`` never match).
+    Every real store owns a ``{scope}_stores`` singleton, so that collection is
+    the reliable marker of a store scope. Only composite ``{handle}__{store}``
+    scopes are considered, so platform/engine collections (``apps_config``,
+    ``{PLATFORM_SLUG}_store_registry``, …) never match.
     """
     raw_db = engine.connection_manager.mongo_db
     suffix = "_stores"
     candidates: set[str] = set()
     for full in await raw_db.list_collection_names():
         if full.endswith(suffix):
-            slug = full[: -len(suffix)]
-            if slug and slug != PLATFORM_SLUG:
-                candidates.add(slug)
+            scope = full[: -len(suffix)]
+            if scope and scope != PLATFORM_SLUG and split_scope(scope) is not None:
+                candidates.add(scope)
     orphans: list[str] = []
-    for slug in sorted(candidates):
-        if await reg["store_registry"].find_one({"slug": slug}, {"_id": 1}) is None:
-            orphans.append(slug)
+    for scope in sorted(candidates):
+        handle, store = split_scope(scope)  # type: ignore[misc]
+        if await reg["store_registry"].find_one({"handle": handle, "store": store}, {"_id": 1}) is None:
+            orphans.append(scope)
     return orphans
 
 
@@ -577,12 +810,15 @@ async def reconcile_stores(engine, drop_orphans: bool = False) -> dict[str, Any]
       retried once via ``provision_store`` (idempotent); a failed retry is
       marked ``failed`` so an operator can act.
     * **Stranded deleting** — rows left ``deleting`` past the cutoff (a delete
-      that crashed mid-drop) have their ``{slug}_*`` collections re-dropped and
+      that crashed mid-drop) have their ``{scope}_*`` collections re-dropped and
       the registry row removed, finishing the deprovision.
-    * **Orphan collections** — physical ``{slug}_*`` collections whose slug has
+    * **Orphan collections** — physical ``{scope}_*`` collections whose scope has
       no registry row (a crash before the first registry write, or a delete
       that lost its row before dropping). Reported and returned; pass
       ``drop_orphans=True`` to drop them.
+
+    ``retried``/``failed``/``deleted``/``orphans`` are reported as composite
+    ``{handle}__{store}`` scope ids.
     """
     result: dict[str, Any] = {"retried": [], "failed": [], "deleted": [], "orphans": [], "dropped": []}
     reg = await _platform_db(engine)
@@ -590,47 +826,51 @@ async def reconcile_stores(engine, drop_orphans: bool = False) -> dict[str, Any]
     cutoff = now_naive - timedelta(minutes=PROVISION_STUCK_MINUTES)
 
     async for doc in reg["store_registry"].find({"status": STORE_STATUS_PROVISIONING}):
-        slug = doc.get("slug")
+        handle, store = doc.get("handle"), doc.get("store")
+        scope = scope_id(handle, store) if handle and store else None
         updated = _as_naive_utc(doc.get("updated_at") or doc.get("created_at"))
-        if not slug or (updated is not None and updated > cutoff):
+        if not scope or (updated is not None and updated > cutoff):
             continue
         try:
-            await provision_store(engine, slug, doc.get("name") or slug)
-            result["retried"].append(slug)
-            await _audit_store_event(engine, "store_provision_retried", slug)
+            await provision_store(engine, handle, store, doc.get("name") or store, doc.get("owner_email"))
+            result["retried"].append(scope)
+            await _audit_store_event(engine, "store_provision_retried", handle, store)
         except Exception as exc:  # noqa: BLE001 — surface as failed, never crash the pass
-            logger.warning(f"Reconcile: provisioning retry failed for '{slug}': {exc}")
+            logger.warning(f"Reconcile: provisioning retry failed for '{scope}': {exc}")
             await reg["store_registry"].update_one(
-                {"slug": slug},
+                {"handle": handle, "store": store},
                 {"$set": {"status": STORE_STATUS_FAILED, "updated_at": datetime.now(timezone.utc)}},
             )
-            result["failed"].append(slug)
-            await _audit_store_event(engine, "store_provision_failed", slug, error=str(exc))
+            result["failed"].append(scope)
+            await _audit_store_event(engine, "store_provision_failed", handle, store, error=str(exc))
 
     async for doc in reg["store_registry"].find({"status": STORE_STATUS_DELETING}):
-        slug = doc.get("slug")
+        handle, store = doc.get("handle"), doc.get("store")
+        scope = scope_id(handle, store) if handle and store else None
         updated = _as_naive_utc(doc.get("updated_at") or doc.get("created_at"))
-        if not slug or (updated is not None and updated > cutoff):
+        if not scope or (updated is not None and updated > cutoff):
             continue
         try:
-            KNOWN_STORES.discard(slug)
-            dropped = await _drop_store_collections(engine, slug)
-            await reg["store_registry"].delete_one({"slug": slug})
+            KNOWN_STORES.discard(scope)
+            dropped = await _drop_store_collections(engine, scope)
+            await reg["store_registry"].delete_one({"handle": handle, "store": store})
+            await _cleanup_namespace_if_empty(engine, handle)
             result["dropped"].extend(dropped)
-            result["deleted"].append(slug)
-            await _audit_store_event(engine, "store_delete_recovered", slug, dropped=len(dropped))
+            result["deleted"].append(scope)
+            await _audit_store_event(engine, "store_delete_recovered", handle, store, dropped=len(dropped))
         except Exception as exc:  # noqa: BLE001 — one bad recovery never blocks the pass
-            logger.warning(f"Reconcile: delete recovery failed for '{slug}': {exc}")
+            logger.warning(f"Reconcile: delete recovery failed for '{scope}': {exc}")
 
-    orphans = await _find_orphan_slugs(engine, reg)
+    orphans = await _find_orphan_scopes(engine, reg)
     result["orphans"] = orphans
     if orphans:
         logger.warning(f"Reconcile: orphan store collections with no registry row: {orphans}")
         if drop_orphans:
-            for slug in orphans:
-                dropped = await _drop_store_collections(engine, slug)
+            for scope in orphans:
+                handle, store = split_scope(scope)  # type: ignore[misc]
+                dropped = await _drop_store_collections(engine, scope)
                 result["dropped"].extend(dropped)
-                await _audit_store_event(engine, "store_orphan_dropped", slug, dropped=len(dropped))
+                await _audit_store_event(engine, "store_orphan_dropped", handle, store, dropped=len(dropped))
 
     await refresh_known_stores()
     return result
@@ -698,11 +938,11 @@ async def _refresh_known_stores_loop() -> None:
 
 
 async def _bootstrap_stores() -> None:
-    """Prepare the registry and hydrate ``KNOWN_STORES`` (ready stores only).
+    """Prepare the registry and hydrate the routing caches (ready stores only).
 
-    Ensures the registry indexes exist, seeds a ``demo`` store on a wholly
-    fresh platform (no registry rows at all), then rebuilds the cache from
-    ``ready`` rows.
+    Ensures the registry + members indexes exist, seeds a ``demo/shop`` store
+    (owned by the platform admin) on a wholly fresh platform (no registry rows
+    at all), then rebuilds the caches from ``ready`` rows.
     """
     try:
         engine = app.state.engine
@@ -710,7 +950,9 @@ async def _bootstrap_stores() -> None:
         reg = await _platform_db(engine)
         has_any = await reg["store_registry"].find_one({}, {"_id": 1}) is not None
         if not has_any:
-            await provision_store(engine, "demo", "Demo Store")
+            await provision_store(
+                engine, "demo", "shop", "Demo Store", owner_email=os.getenv("ADMIN_EMAIL")
+            )
         await refresh_known_stores()
         logger.info(f"Multi-tenant ready — stores: {sorted(KNOWN_STORES)}")
     except Exception as exc:  # noqa: BLE001 — startup best-effort
@@ -749,6 +991,10 @@ def _build_rate_limits() -> dict[str, list[RateLimit]]:
         ],
         "upload": [
             RateLimit(max_attempts=_int_env("UPLOAD_RATELIMIT_PER_MIN", 30), window_seconds=60),
+        ],
+        "signup": [
+            RateLimit(max_attempts=_int_env("SIGNUP_RATELIMIT_PER_MIN", 5), window_seconds=60),
+            RateLimit(max_attempts=_int_env("SIGNUP_RATELIMIT_PER_HOUR", 20), window_seconds=3600),
         ],
     }
 
@@ -897,7 +1143,7 @@ async def submit_inquiry(
     # a convincing 201 while we drop the submission — no insert, no notify.
     if str(body.get("company_website") or "").strip():
         logger.info("Honeypot tripped on submit-inquiry — dropping silently")
-        base_path = f"/{request.scope['store_slug']}" if request.scope.get("store_slug") else ""
+        base_path = request.scope.get("root_path", "")
         return JSONResponse(
             {"ok": True, "id": None, "redirect": f"{base_path}/contact/thanks"}, status_code=201
         )
@@ -945,7 +1191,7 @@ async def submit_inquiry(
     except Exception as exc:  # noqa: BLE001 — notification is never critical
         logger.warning(f"Lead notification scheduling skipped: {exc}")
 
-    base_path = f"/{request.scope['store_slug']}" if request.scope.get("store_slug") else ""
+    base_path = request.scope.get("root_path", "")
     return JSONResponse(
         {"ok": True, "id": str(result.inserted_id), "redirect": f"{base_path}/contact/thanks"},
         status_code=201,
@@ -962,12 +1208,10 @@ async def upload_image(
     """Admin-only Cloudinary image upload.
 
     Kept as a custom route because ``mdb-engine`` does not ship a managed
-    uploader. Auth is enforced manually against the engine session so we
-    stay consistent with every other admin-gated surface.
+    uploader. Gated to owner/editor of the store's namespace (or the platform
+    superuser), consistent with every other store-write surface.
     """
-    user = await get_current_user(request)
-    if not user or str(user.get("role") or "").lower() != "admin":
-        raise HTTPException(status_code=401, detail="admin required")
+    await _require_store_write(request)
 
     if not (_cloud_name and _cloud_key and _cloud_secret):
         raise HTTPException(status_code=503, detail="Cloudinary not configured")
@@ -1031,10 +1275,8 @@ async def upload_video(
     folder: str = Form("slideshow_videos"),
     _rl: None = Depends(_rate_limit("upload", per="user")),
 ) -> JSONResponse:
-    """Admin-only Cloudinary video upload with intelligent compression."""
-    user = await get_current_user(request)
-    if not user or str(user.get("role") or "").lower() != "admin":
-        raise HTTPException(status_code=401, detail="admin required")
+    """Owner/editor Cloudinary video upload with intelligent compression."""
+    await _require_store_write(request)
 
     if not (_cloud_name and _cloud_key and _cloud_secret):
         raise HTTPException(status_code=503, detail="Cloudinary not configured")
@@ -1098,11 +1340,52 @@ async def upload_video(
 # written until the admin confirms via /admin/ai/apply.
 
 
-async def _require_admin(request: Request) -> dict[str, Any]:
+async def _require_platform_admin(request: Request) -> dict[str, Any]:
+    """Gate platform-wide operations (``/manage`` lifecycle, reconcile).
+
+    Only the seeded global admin (platform superuser) qualifies — these actions
+    span every namespace, so per-namespace membership does not grant them.
+    """
     user = await get_current_user(request)
-    if not user or str(user.get("role") or "").lower() != "admin":
-        raise HTTPException(status_code=401, detail="admin required")
+    if not rbac.is_platform_superuser(user):
+        raise HTTPException(status_code=401, detail="platform admin required")
     return user
+
+
+async def _require_store_write(request: Request) -> dict[str, Any]:
+    """Gate store-content writes (AI editor, uploads) to owner/editor/superuser.
+
+    Relies on ``StoreRoleOverlayMiddleware`` having rewritten
+    ``request.state.user_roles`` from the caller's membership of the request's
+    namespace. ``viewer`` (read-only) and non-members are rejected.
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="authentication required")
+    if not rbac.grants_admin(await get_user_roles(request)):
+        raise HTTPException(status_code=403, detail="you don't have edit access to this store")
+    return user
+
+
+async def _require_namespace_owner(request: Request) -> tuple[dict[str, Any], str]:
+    """Gate namespace-level ops (team, store create/delete) to an owner/superuser.
+
+    Returns ``(user, handle)`` where ``handle`` is the request's namespace.
+    Raises 400 if the request is not namespace-scoped.
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="authentication required")
+    handle = request.scope.get("handle")
+    if not handle:
+        raise HTTPException(status_code=400, detail="not a namespace request")
+    if rbac.is_platform_superuser(user):
+        return user, handle
+    pdb = await _platform_db(request.app.state.engine)
+    role = await rbac.get_namespace_role(pdb["namespace_members"], handle, user.get("email"))
+    if role not in rbac.OWNER_ROLES:
+        raise HTTPException(status_code=403, detail="only the namespace owner can do that")
+    return user, handle
 
 
 def _clean_messages(raw: Any) -> list[dict[str, str]]:
@@ -1132,7 +1415,7 @@ async def ai_chat(
     ops to echo back to /admin/ai/apply; ``diff`` is the human-readable
     change list for the confirm card. No writes happen here.
     """
-    await _require_admin(request)
+    await _require_store_write(request)
     body = await _read_request_body(request)
     messages = _clean_messages(body.get("messages"))
     if not messages:
@@ -1165,7 +1448,7 @@ async def ai_apply(
     _rl: None = Depends(_rate_limit("ai", per="user")),
 ) -> JSONResponse:
     """Re-validate the confirmed ops against a fresh snapshot, then apply."""
-    user = await _require_admin(request)
+    user = await _require_store_write(request)
     body = await _read_request_body(request)
     ops = body.get("ops")
     if not isinstance(ops, list) or not ops:
@@ -1187,74 +1470,216 @@ async def ai_apply(
     )
 
 
-# ── Platform store-management console (/manage) ─────────────────────────
+# ── Namespaces, team invites, and the /manage console ──────────────────
 #
-# One shared admin manages every store here. The page shows a login form when
-# signed out (posts to the global /auth/login) and a store picker + create
-# form when signed in. All platform data lives in the platform scope.
+# A user owns a **handle** (their namespace) and every store under it at
+# /{handle}/{store}. The platform superuser (seeded ADMIN_EMAIL) sees every
+# namespace. Team roles (owner/editor/viewer) live per handle in
+# namespace_members and are enforced by StoreRoleOverlayMiddleware.
+
+INVITE_TTL_SECONDS = int(os.getenv("INVITE_TTL_SECONDS", str(7 * 24 * 3600)))
+# Optional guard on self-serve abuse: cap stores per owned handle (0 = off).
+MAX_STORES_PER_HANDLE = int(os.getenv("MAX_STORES_PER_HANDLE", "0"))
+
+
+def _invite_secret() -> str:
+    """Signing secret for namespace invite tokens (reuses the engine JWT secret)."""
+    return get_jwt_secret() or os.getenv("MDB_JWT_SECRET") or "ai-stores-dev-invite-secret"
+
+
+def _store_url(handle: str, store: str) -> str:
+    return f"/{handle}/{store}/"
+
+
+def _card_from_row(doc: dict[str, Any]) -> dict[str, str]:
+    handle = doc.get("handle", "")
+    store = doc.get("store", "")
+    return {
+        "handle": handle,
+        "store": store,
+        "name": doc.get("name") or store,
+        "status": doc.get("status") or STORE_STATUS_READY,
+        "url": _store_url(handle, store),
+        "admin_url": f"/{handle}/{store}/admin/dashboard",
+        "team_url": f"/{handle}/{store}/admin/team",
+    }
+
+
+async def _namespaces_for_user(engine, user: dict[str, Any] | None) -> tuple[list[dict[str, Any]], bool]:
+    """Build the console's namespace list for ``user``.
+
+    Returns ``(namespaces, can_create)``. The superuser sees every handle;
+    everyone else sees only handles they belong to. ``role`` is the caller's
+    namespace role (``"superuser"`` for the platform admin), and ``can_create``
+    is set for handles the caller owns (or any, for the superuser).
+    """
+    if not user:
+        return [], False
+    reg = await _platform_db(engine)
+    superuser = rbac.is_platform_superuser(user)
+
+    # handle -> role for this user
+    roles: dict[str, str] = {}
+    if superuser:
+        async for doc in reg["store_registry"].find({}, {"handle": 1}):
+            if doc.get("handle"):
+                roles.setdefault(doc["handle"], "superuser")
+    else:
+        members = _members_collection(engine)
+        async for m in members.find({"email": rbac.normalize_email(user.get("email"))}):
+            if m.get("handle") and m.get("role") in rbac.NAMESPACE_ROLES:
+                roles[m["handle"]] = m["role"]
+
+    namespaces: list[dict[str, Any]] = []
+    for handle in sorted(roles):
+        role = roles[handle]
+        is_owner = superuser or role == rbac.ROLE_OWNER
+        stores: list[dict[str, str]] = []
+        async for doc in reg["store_registry"].find({"handle": handle}).sort("created_at", 1):
+            stores.append(_card_from_row(doc))
+        namespaces.append(
+            {"handle": handle, "role": role, "is_owner": is_owner, "stores": stores}
+        )
+    can_create = superuser or any(ns["is_owner"] for ns in namespaces)
+    return namespaces, can_create
 
 
 @app.get("/manage", response_class=HTMLResponse)
 async def manage_home(request: Request):
-    """Store picker + create form for the shared admin (login form otherwise)."""
+    """Role-aware console: namespaces + stores you can manage (login otherwise)."""
     user = await get_current_user(request)
-    is_admin = bool(user and str(user.get("role") or "").lower() == "admin")
-    stores: list[dict[str, str]] = []
-    if is_admin:
-        reg = await _platform_db(app.state.engine)
-        async for doc in reg["store_registry"].find({}).sort("created_at", 1):
-            stores.append(
-                {
-                    "slug": doc.get("slug", ""),
-                    "name": doc.get("name") or doc.get("slug", ""),
-                    "status": doc.get("status") or STORE_STATUS_READY,
-                }
-            )
+    is_admin = bool(user)
+    superuser = rbac.is_platform_superuser(user)
+    namespaces, can_create = await _namespaces_for_user(app.state.engine, user)
+    owned_handles = [ns["handle"] for ns in namespaces if ns["is_owner"]]
     return _templates.TemplateResponse(
         request,
         "manage.html",
-        {"user": user, "is_admin": is_admin, "stores": stores, "store": {}},
+        {
+            "user": user,
+            "is_admin": is_admin,
+            "is_superuser": superuser,
+            "namespaces": namespaces,
+            "can_create": can_create,
+            "owned_handles": owned_handles,
+            "store": {},
+        },
     )
+
+
+@app.get("/manage/ns/{handle}", response_class=HTMLResponse)
+async def namespace_landing(handle: str, request: Request):
+    """Public ``/{handle}/`` landing — lists a handle's published stores.
+
+    Rendered via this reserved platform route (the store-scope middleware
+    rewrites ``/{handle}/`` here). Always public; shows a "manage" CTA when the
+    viewer owns the handle.
+    """
+    engine = app.state.engine
+    reg = await _platform_db(engine)
+    handle = (handle or "").strip().lower()
+    stores: list[dict[str, str]] = []
+    async for doc in reg["store_registry"].find(
+        {"handle": handle, **_routable_status_query()}
+    ).sort("created_at", 1):
+        stores.append(_card_from_row(doc))
+    if not stores and not await _handle_is_registered(handle):
+        return HTMLResponse(_HANDLE_404_HTML, status_code=404)
+
+    user = await get_current_user(request)
+    can_manage = rbac.is_platform_superuser(user)
+    if user and not can_manage:
+        role = await rbac.get_namespace_role(
+            reg["namespace_members"], handle, user.get("email")
+        )
+        can_manage = role in rbac.OWNER_ROLES
+    return _templates.TemplateResponse(
+        request,
+        "namespace_landing.html",
+        {"handle": handle, "stores": stores, "can_manage": can_manage, "store": {}},
+    )
+
+
+async def _assert_namespace_owner(request: Request, handle: str) -> dict[str, Any]:
+    """Return the caller if they own ``handle`` (or are the superuser); else 401/403."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="authentication required")
+    if rbac.is_platform_superuser(user):
+        return user
+    pdb = await _platform_db(request.app.state.engine)
+    role = await rbac.get_namespace_role(pdb["namespace_members"], handle, user.get("email"))
+    if role not in rbac.OWNER_ROLES:
+        raise HTTPException(status_code=403, detail="only the namespace owner can do that")
+    return user
 
 
 @app.post("/manage/stores")
 async def manage_create_store(request: Request) -> JSONResponse:
-    """Provision a new store at runtime (admin only) — no redeploy needed."""
-    user = await _require_admin(request)
+    """Provision a store under a handle (owner of that handle, or superuser).
+
+    Body: ``{handle, slug|store, name}``. Owners may only create under a handle
+    they already own; the superuser may create under any handle.
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="authentication required")
     body = await _read_request_body(request)
     try:
-        result = await provision_store(
-            app.state.engine, str(body.get("slug") or ""), str(body.get("name") or "")
-        )
+        handle = _validate_slug(str(body.get("handle") or ""))
+        store = _validate_slug(str(body.get("slug") or body.get("store") or ""))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    await _audit_store_event(app.state.engine, "store_created", result["slug"], user, name=result["name"])
+
+    await _assert_namespace_owner(request, handle)
+
+    engine = app.state.engine
+    reg = await _platform_db(engine)
+    if await reg["store_registry"].find_one({"handle": handle, "store": store}, {"_id": 1}):
+        raise HTTPException(status_code=409, detail=f"/{handle}/{store} already exists")
+    if MAX_STORES_PER_HANDLE and not rbac.is_platform_superuser(user):
+        count = await reg["store_registry"].count_documents({"handle": handle})
+        if count >= MAX_STORES_PER_HANDLE:
+            raise HTTPException(status_code=409, detail="store limit reached for this namespace")
+
+    owner_email = rbac.normalize_email(user.get("email"))
+    try:
+        result = await provision_store(engine, handle, store, str(body.get("name") or ""), owner_email)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Guarantee the handle always has an owner. For a superuser-created store in
+    # a brand-new handle, seed the acting/target owner so it is manageable.
+    if not await rbac.count_owners(reg["namespace_members"], handle):
+        await rbac.add_member(reg["namespace_members"], handle, owner_email, rbac.ROLE_OWNER)
+
+    await _audit_store_event(engine, "store_created", handle, store, user, name=result["name"])
     return JSONResponse(
-        {"ok": True, "slug": result["slug"], "name": result["name"], "url": f"/{result['slug']}/"},
+        {"ok": True, "handle": handle, "store": store, "name": result["name"], "url": result and _store_url(handle, store)},
         status_code=201,
     )
 
 
-async def _require_store_row(engine, slug: str) -> dict[str, Any]:
+async def _require_store_row(engine, handle: str, store: str) -> dict[str, Any]:
     """Fetch a registry row for a lifecycle op, or raise 404."""
     reg = await _platform_db(engine)
-    doc = await reg["store_registry"].find_one({"slug": slug})
+    doc = await reg["store_registry"].find_one({"handle": handle, "store": store})
     if not doc:
         raise HTTPException(status_code=404, detail="store not found")
     return doc
 
 
-@app.patch("/manage/stores/{slug}")
-async def manage_rename_store(slug: str, request: Request) -> JSONResponse:
-    """Rename a store's display name (admin only).
+@app.patch("/manage/stores/{handle}/{store}")
+async def manage_rename_store(handle: str, store: str, request: Request) -> JSONResponse:
+    """Rename a store's display name (namespace owner or superuser).
 
-    The address/slug is immutable in this version: changing it would break
-    bookmarks and canonical URLs and require a full collection rename plus an
-    ``app_id`` rewrite. Only the human-readable ``name`` changes here.
+    The address is immutable in this version: changing it would break bookmarks
+    and canonical URLs and require a full collection rename plus an ``app_id``
+    rewrite. Only the human-readable ``name`` changes here.
     """
-    user = await _require_admin(request)
     engine = app.state.engine
-    await _require_store_row(engine, slug)
+    await _require_store_row(engine, handle, store)
+    user = await _assert_namespace_owner(request, handle)
     body = await _read_request_body(request)
     name = str(body.get("name") or "").strip()
     if not name:
@@ -1262,92 +1687,322 @@ async def manage_rename_store(slug: str, request: Request) -> JSONResponse:
 
     now = datetime.now(timezone.utc)
     reg = await _platform_db(engine)
-    await reg["store_registry"].update_one({"slug": slug}, {"$set": {"name": name, "updated_at": now}})
+    await reg["store_registry"].update_one(
+        {"handle": handle, "store": store}, {"$set": {"name": name, "updated_at": now}}
+    )
     # Keep the store's own singleton in sync so the storefront shows the new name.
-    store_db = await engine.get_scoped_db(slug)
+    store_db = await engine.get_scoped_db(scope_id(handle, store))
     await store_db["stores"].update_one({}, {"$set": {"name": name}})
-    await _audit_store_event(engine, "store_renamed", slug, user, name=name)
-    logger.info(f"Renamed store '{slug}' -> {name!r}")
-    return JSONResponse({"ok": True, "slug": slug, "name": name})
+    await _audit_store_event(engine, "store_renamed", handle, store, user, name=name)
+    logger.info(f"Renamed store '{scope_id(handle, store)}' -> {name!r}")
+    return JSONResponse({"ok": True, "handle": handle, "store": store, "name": name})
 
 
-@app.post("/manage/stores/{slug}/archive")
-async def manage_archive_store(slug: str, request: Request) -> JSONResponse:
+@app.post("/manage/stores/{handle}/{store}/archive")
+async def manage_archive_store(handle: str, store: str, request: Request) -> JSONResponse:
     """Suspend a store: it stops routing (404s) but its data is kept."""
-    user = await _require_admin(request)
-    if slug == PLATFORM_SLUG:
-        raise HTTPException(status_code=400, detail="cannot archive the platform")
-    reg = await _platform_db(app.state.engine)
-    res = await reg["store_registry"].update_one(
-        {"slug": slug},
-        {"$set": {"status": STORE_STATUS_ARCHIVED, "updated_at": datetime.now(timezone.utc)}},
-    )
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="store not found")
-    await refresh_known_stores()
-    await _audit_store_event(app.state.engine, "store_archived", slug, user)
-    logger.info(f"Archived store '{slug}'")
-    return JSONResponse({"ok": True, "slug": slug, "status": STORE_STATUS_ARCHIVED})
-
-
-@app.post("/manage/stores/{slug}/restore")
-async def manage_restore_store(slug: str, request: Request) -> JSONResponse:
-    """Re-enable an archived (or failed) store."""
-    user = await _require_admin(request)
-    reg = await _platform_db(app.state.engine)
-    res = await reg["store_registry"].update_one(
-        {"slug": slug},
-        {"$set": {"status": STORE_STATUS_READY, "updated_at": datetime.now(timezone.utc)}},
-    )
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="store not found")
-    await refresh_known_stores()
-    await _audit_store_event(app.state.engine, "store_restored", slug, user)
-    logger.info(f"Restored store '{slug}'")
-    return JSONResponse({"ok": True, "slug": slug, "status": STORE_STATUS_READY})
-
-
-@app.delete("/manage/stores/{slug}")
-async def manage_delete_store(slug: str, request: Request) -> JSONResponse:
-    """Permanently deprovision a store (admin only).
-
-    Drops every ``{slug}_*`` collection and removes the registry row. This is
-    **irreversible** — use archive for a reversible suspend. Requires
-    ``{"confirm": "<slug>"}`` in the body to guard against accidents.
-    """
-    user = await _require_admin(request)
-    if slug == PLATFORM_SLUG:
-        raise HTTPException(status_code=400, detail="cannot delete the platform")
     engine = app.state.engine
-    await _require_store_row(engine, slug)
-    body = await _read_request_body(request)
-    if str(body.get("confirm") or "").strip() != slug:
-        raise HTTPException(status_code=422, detail="confirm must equal the store slug")
-
+    if handle == PLATFORM_SLUG:
+        raise HTTPException(status_code=400, detail="cannot archive the platform")
+    await _require_store_row(engine, handle, store)
+    user = await _assert_namespace_owner(request, handle)
     reg = await _platform_db(engine)
     await reg["store_registry"].update_one(
-        {"slug": slug}, {"$set": {"status": STORE_STATUS_DELETING, "updated_at": datetime.now(timezone.utc)}}
+        {"handle": handle, "store": store},
+        {"$set": {"status": STORE_STATUS_ARCHIVED, "updated_at": datetime.now(timezone.utc)}},
     )
-    KNOWN_STORES.discard(slug)
-    dropped = await _drop_store_collections(engine, slug)
-    await reg["store_registry"].delete_one({"slug": slug})
     await refresh_known_stores()
-    await _audit_store_event(engine, "store_deleted", slug, user, dropped=len(dropped))
-    logger.info(f"Deleted store '{slug}' — dropped {len(dropped)} collection(s)")
-    return JSONResponse({"ok": True, "slug": slug, "dropped": dropped})
+    await _audit_store_event(engine, "store_archived", handle, store, user)
+    logger.info(f"Archived store '{scope_id(handle, store)}'")
+    return JSONResponse({"ok": True, "handle": handle, "store": store, "status": STORE_STATUS_ARCHIVED})
+
+
+@app.post("/manage/stores/{handle}/{store}/restore")
+async def manage_restore_store(handle: str, store: str, request: Request) -> JSONResponse:
+    """Re-enable an archived (or failed) store."""
+    engine = app.state.engine
+    await _require_store_row(engine, handle, store)
+    user = await _assert_namespace_owner(request, handle)
+    reg = await _platform_db(engine)
+    await reg["store_registry"].update_one(
+        {"handle": handle, "store": store},
+        {"$set": {"status": STORE_STATUS_READY, "updated_at": datetime.now(timezone.utc)}},
+    )
+    await refresh_known_stores()
+    await _audit_store_event(engine, "store_restored", handle, store, user)
+    logger.info(f"Restored store '{scope_id(handle, store)}'")
+    return JSONResponse({"ok": True, "handle": handle, "store": store, "status": STORE_STATUS_READY})
+
+
+@app.delete("/manage/stores/{handle}/{store}")
+async def manage_delete_store(handle: str, store: str, request: Request) -> JSONResponse:
+    """Permanently deprovision a store (namespace owner or superuser).
+
+    Drops every ``{handle}__{store}_*`` collection and removes the registry
+    row; if it was the handle's last store, the handle's memberships are
+    cleaned up too. Irreversible — use archive for a reversible suspend.
+    Requires ``{"confirm": "<store>"}`` in the body to guard against accidents.
+    """
+    engine = app.state.engine
+    if handle == PLATFORM_SLUG:
+        raise HTTPException(status_code=400, detail="cannot delete the platform")
+    await _require_store_row(engine, handle, store)
+    user = await _assert_namespace_owner(request, handle)
+    body = await _read_request_body(request)
+    if str(body.get("confirm") or "").strip() != store:
+        raise HTTPException(status_code=422, detail="confirm must equal the store address")
+
+    scope = scope_id(handle, store)
+    reg = await _platform_db(engine)
+    await reg["store_registry"].update_one(
+        {"handle": handle, "store": store},
+        {"$set": {"status": STORE_STATUS_DELETING, "updated_at": datetime.now(timezone.utc)}},
+    )
+    KNOWN_STORES.discard(scope)
+    dropped = await _drop_store_collections(engine, scope)
+    await reg["store_registry"].delete_one({"handle": handle, "store": store})
+    await _cleanup_namespace_if_empty(engine, handle)
+    await refresh_known_stores()
+    await _audit_store_event(engine, "store_deleted", handle, store, user, dropped=len(dropped))
+    logger.info(f"Deleted store '{scope}' — dropped {len(dropped)} collection(s)")
+    return JSONResponse({"ok": True, "handle": handle, "store": store, "dropped": dropped})
 
 
 @app.post("/manage/reconcile")
 async def manage_reconcile(request: Request) -> JSONResponse:
-    """Run the store reconciler (admin only).
+    """Run the store reconciler (platform superuser only).
 
-    Finishes stuck provisions and reports orphaned ``{slug}_*`` collections;
+    Finishes stuck provisions and reports orphaned ``{scope}_*`` collections;
     pass ``{"drop_orphans": true}`` to also drop them.
     """
-    await _require_admin(request)
+    await _require_platform_admin(request)
     body = await _read_request_body(request)
     result = await reconcile_stores(app.state.engine, drop_orphans=bool(body.get("drop_orphans")))
     return JSONResponse({"ok": True, **result})
+
+
+# ── Namespace team management (owner-gated) ─────────────────────────────
+#
+# Team membership is per handle. These live under the store admin surface
+# (/{handle}/{store}/admin/team) so the handle is taken from the request scope,
+# and are gated by _require_namespace_owner. Invites are stateless signed JWTs;
+# the invitee accepts while logged in with the invited email.
+
+
+@app.get("/admin/team/members")
+async def team_list(request: Request) -> JSONResponse:
+    """List the namespace's members (owner or superuser)."""
+    user, handle = await _require_namespace_owner(request)
+    pdb = await _platform_db(request.app.state.engine)
+    members = await rbac.list_members(pdb["namespace_members"], handle)
+    return JSONResponse({"ok": True, "handle": handle, "members": members})
+
+
+@app.post("/admin/team/invite")
+async def team_invite(request: Request) -> JSONResponse:
+    """Issue a signed invite for ``{email, role}`` in this namespace (owner only)."""
+    user, handle = await _require_namespace_owner(request)
+    body = await _read_request_body(request)
+    email = rbac.normalize_email(body.get("email"))
+    role = str(body.get("role") or rbac.ROLE_VIEWER).strip().lower()
+    if "@" not in email or "." not in email:
+        raise HTTPException(status_code=422, detail="a valid email is required")
+    if role not in rbac.NAMESPACE_ROLES:
+        raise HTTPException(status_code=422, detail=f"role must be one of {rbac.NAMESPACE_ROLES}")
+
+    token = encode_jwt_token(
+        {"purpose": "ns_invite", "handle": handle, "email": email, "role": role},
+        _invite_secret(),
+        expires_in=INVITE_TTL_SECONDS,
+    )
+    # Acceptance lives on the reserved /manage surface (not /admin) so the
+    # invitee — a non-member by definition — is not blocked by the overlay.
+    invite_url = f"/manage/invite?token={token}"
+    await _audit_store_event(
+        request.app.state.engine, "team_invited", handle, request.scope.get("store"), user,
+        invited=email, role=role,
+    )
+    return JSONResponse({"ok": True, "handle": handle, "email": email, "role": role, "token": token, "invite_url": invite_url})
+
+
+@app.get("/manage/invite", response_class=HTMLResponse)
+async def invite_page(request: Request):
+    """Landing for an invite link: shows accept CTA (or a sign-in prompt)."""
+    token = (request.query_params.get("token") or "").strip()
+    user = await get_current_user(request)
+    claims: dict[str, Any] | None = None
+    if token:
+        try:
+            decoded = decode_jwt_token(token, _invite_secret())
+            if decoded.get("purpose") == "ns_invite":
+                claims = decoded
+        except Exception:  # noqa: BLE001 — render the "invalid/expired" state
+            claims = None
+    return _templates.TemplateResponse(
+        request,
+        "invite.html",
+        {"user": user, "token": token, "invite": claims, "store": {}},
+    )
+
+
+@app.post("/manage/invite/accept")
+async def team_accept(request: Request) -> JSONResponse:
+    """Accept a namespace invite (must be logged in as the invited email)."""
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="sign in to accept an invite")
+    body = await _read_request_body(request)
+    token = str(body.get("token") or (request.query_params.get("token") or "")).strip()
+    if not token:
+        raise HTTPException(status_code=422, detail="token is required")
+    try:
+        claims = decode_jwt_token(token, _invite_secret())
+    except Exception as exc:  # noqa: BLE001 — any decode failure is a bad/expired invite
+        raise HTTPException(status_code=400, detail="invalid or expired invite") from exc
+    if claims.get("purpose") != "ns_invite":
+        raise HTTPException(status_code=400, detail="invalid invite")
+
+    handle = claims.get("handle")
+    email = rbac.normalize_email(claims.get("email"))
+    role = claims.get("role")
+    if role not in rbac.NAMESPACE_ROLES or not handle:
+        raise HTTPException(status_code=400, detail="invalid invite")
+    if rbac.normalize_email(user.get("email")) != email:
+        raise HTTPException(status_code=403, detail="this invite was issued to a different email")
+
+    pdb = await _platform_db(request.app.state.engine)
+    await rbac.add_member(pdb["namespace_members"], handle, email, role)
+    await refresh_known_stores()
+    await _audit_store_event(
+        request.app.state.engine, "team_joined", handle, None, user, email=email, role=role
+    )
+    return JSONResponse({"ok": True, "handle": handle, "email": email, "role": role})
+
+
+@app.patch("/admin/team/members")
+async def team_change_role(request: Request) -> JSONResponse:
+    """Change a member's role (owner only), keeping ≥1 owner per handle."""
+    user, handle = await _require_namespace_owner(request)
+    body = await _read_request_body(request)
+    email = rbac.normalize_email(body.get("email"))
+    role = str(body.get("role") or "").strip().lower()
+    if role not in rbac.NAMESPACE_ROLES:
+        raise HTTPException(status_code=422, detail=f"role must be one of {rbac.NAMESPACE_ROLES}")
+    pdb = await _platform_db(request.app.state.engine)
+    members = pdb["namespace_members"]
+    existing = await members.find_one({"handle": handle, "email": email})
+    if not existing:
+        raise HTTPException(status_code=404, detail="member not found")
+    # Guardrail: never demote the last remaining owner.
+    if existing.get("role") == rbac.ROLE_OWNER and role != rbac.ROLE_OWNER:
+        if await rbac.count_owners(members, handle) <= 1:
+            raise HTTPException(status_code=409, detail="a namespace must keep at least one owner")
+    await rbac.add_member(members, handle, email, role)
+    await _audit_store_event(
+        request.app.state.engine, "team_role_changed", handle, None, user, email=email, role=role
+    )
+    return JSONResponse({"ok": True, "handle": handle, "email": email, "role": role})
+
+
+@app.delete("/admin/team/members")
+async def team_remove_member(request: Request) -> JSONResponse:
+    """Remove a member (owner only), keeping ≥1 owner per handle."""
+    user, handle = await _require_namespace_owner(request)
+    body = await _read_request_body(request)
+    email = rbac.normalize_email(body.get("email"))
+    pdb = await _platform_db(request.app.state.engine)
+    members = pdb["namespace_members"]
+    existing = await members.find_one({"handle": handle, "email": email})
+    if not existing:
+        raise HTTPException(status_code=404, detail="member not found")
+    if existing.get("role") == rbac.ROLE_OWNER and await rbac.count_owners(members, handle) <= 1:
+        raise HTTPException(status_code=409, detail="a namespace must keep at least one owner")
+    await members.delete_one({"handle": handle, "email": email})
+    await _audit_store_event(
+        request.app.state.engine, "team_removed", handle, None, user, email=email
+    )
+    return JSONResponse({"ok": True, "handle": handle, "email": email})
+
+
+@app.get("/admin/team", response_class=HTMLResponse, include_in_schema=False, name="team_page")
+async def team_page(request: Request):  # pragma: no cover - thin template wrapper
+    """Owner-only team management page (rendered under the store admin)."""
+    user, handle = await _require_namespace_owner(request)
+    pdb = await _platform_db(request.app.state.engine)
+    members = await rbac.list_members(pdb["namespace_members"], handle)
+    store_db = await _scoped_db_for_request(request)
+    store_doc = await store_db["stores"].find_one({}) or {}
+    return _templates.TemplateResponse(
+        request,
+        "admin_team.html",
+        {"handle": handle, "members": members, "store": store_doc, "roles": rbac.NAMESPACE_ROLES},
+    )
+
+
+# ── Public self-serve signup ────────────────────────────────────────────
+
+
+@app.get("/signup", response_class=HTMLResponse)
+async def signup_page(request: Request):
+    """Public "claim your handle + create your first store" page."""
+    user = await get_current_user(request)
+    return _templates.TemplateResponse(
+        request, "signup.html", {"user": user, "store": {}}
+    )
+
+
+@app.post("/signup")
+async def signup(
+    request: Request, _rl: None = Depends(_rate_limit("signup", per="ip"))
+) -> JSONResponse:
+    """Claim a handle + first store, create a member user, and seed ownership.
+
+    Validates the (globally unique) handle and store slug, creates a non-admin
+    user carrying its ``handle``, provisions ``{handle}__{store}``, and inserts
+    the owner membership. The client then logs in via ``/auth/login``.
+    """
+    engine = app.state.engine
+    body = await _read_request_body(request)
+    email = rbac.normalize_email(body.get("email"))
+    password = str(body.get("password") or "")
+    try:
+        handle = _validate_slug(str(body.get("handle") or ""))
+        store = _validate_slug(str(body.get("slug") or body.get("store") or "shop"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if "@" not in email or "." not in email:
+        raise HTTPException(status_code=422, detail="a valid email is required")
+    if len(password) < 8:
+        raise HTTPException(status_code=422, detail="password must be at least 8 characters")
+
+    pdb = await _platform_db(engine)
+    reg = await _platform_db(engine)
+    if await reg["store_registry"].find_one({"handle": handle}, {"_id": 1}):
+        raise HTTPException(status_code=409, detail=f"the handle '{handle}' is already taken")
+    if await pdb["users"].find_one({"email": email}, {"_id": 1}):
+        raise HTTPException(status_code=409, detail="an account with that email already exists")
+
+    created = await create_app_user(pdb, email, password, role="member")
+    if not created:
+        raise HTTPException(status_code=409, detail="could not create the account")
+    with contextlib.suppress(Exception):
+        await pdb["users"].update_one({"_id": created["_id"]}, {"$set": {"handle": handle}})
+
+    try:
+        result = await provision_store(engine, handle, store, str(body.get("store_name") or ""), email)
+    except ValueError as exc:
+        # Roll back the just-created user so the handle/email stay claimable.
+        with contextlib.suppress(Exception):
+            await pdb["users"].delete_one({"_id": created["_id"]})
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    await rbac.add_member(pdb["namespace_members"], handle, email, rbac.ROLE_OWNER)
+    await _audit_store_event(engine, "signup", handle, store, {"email": email}, name=result["name"])
+    logger.info(f"Signup: {email} claimed /{handle} with store '{store}'")
+    return JSONResponse(
+        {"ok": True, "handle": handle, "store": store, "email": email, "url": _store_url(handle, store)},
+        status_code=201,
+    )
 
 
 if __name__ == "__main__":

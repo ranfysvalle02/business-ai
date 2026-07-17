@@ -1,7 +1,7 @@
 {% extends "_base.html" %}
 
 {%- set store = {} -%}
-{% set seo_title = 'Manage Stores — AI Stores' %}
+{% set seo_title = 'Console — AI Stores' %}
 {% set robots    = 'noindex,nofollow' %}
 {% set show_admin_cta = False %}
 
@@ -27,11 +27,11 @@
 <div class="container mx-auto px-4 py-10 sm:py-14 max-w-4xl">
 
   {% if not is_admin %}
-  {# ── Signed out: shared-admin login ─────────────────────────────── #}
+  {# ── Signed out: login (+ sign-up link) ──────────────────────────── #}
   <div class="max-w-md mx-auto reveal">
     <div class="text-center mb-6">
       <h1 class="text-3xl font-extrabold text-store-text">Store Console</h1>
-      <p class="mt-2 text-store-muted">Sign in to create and manage your stores.</p>
+      <p class="mt-2 text-store-muted">Sign in to manage your stores.</p>
     </div>
     <div id="login-error" class="hidden bg-red-900/70 border border-red-700 text-red-200 px-4 py-3 rounded mb-4" role="alert">
       <span id="login-error-msg"></span>
@@ -55,35 +55,57 @@
         <span data-label>Sign in</span>
       </button>
     </form>
+    <p class="text-center text-store-muted mt-6 text-sm">
+      New here? <a href="/signup" class="text-store-primary font-semibold hover:underline">Claim your handle</a> and open your first store.
+    </p>
   </div>
 
   {% else %}
-  {# ── Signed in: store picker + create ───────────────────────────── #}
+  {# ── Signed in: namespaces + stores ──────────────────────────────── #}
   <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4 reveal">
     <div>
-      <h1 class="text-2xl sm:text-4xl font-extrabold text-store-text">Your Stores</h1>
-      <p class="text-store-muted mt-1">One login manages every store. Open a storefront or its admin console.</p>
+      <h1 class="text-2xl sm:text-4xl font-extrabold text-store-text">
+        {% if is_superuser %}All namespaces{% else %}Your namespaces{% endif %}
+      </h1>
+      <p class="text-store-muted mt-1">
+        {% if is_superuser %}You are the platform admin — every namespace is visible.{% else %}Open a storefront or its admin console.{% endif %}
+      </p>
     </div>
+    {% if is_superuser %}
     <button type="button" id="reconcile-btn"
             class="shrink-0 px-4 py-2 bg-store-text/10 text-store-text border border-store-text/20 rounded-store hover:bg-store-text/20 transition text-sm font-semibold"
             title="Finish stuck provisions and report orphaned collections">
       <i class="fas fa-broom mr-2"></i><span data-label>Reconcile</span>
     </button>
+    {% endif %}
   </div>
 
+  {% if can_create %}
   <div class="reveal bg-store-surface border border-store-text/10 rounded-xl p-5 sm:p-6 mb-8">
     <h2 class="text-lg font-bold text-store-text mb-4"><i class="fas fa-plus mr-2"></i>Create a store</h2>
-    <form id="create-store-form" class="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-3 items-end">
+    <form id="create-store-form" class="grid grid-cols-1 sm:grid-cols-[auto_1fr_1fr_auto] gap-3 items-end">
+      <div>
+        <label for="new-handle" class="block text-store-muted text-xs mb-1">Namespace</label>
+        {% if is_superuser %}
+        <input type="text" id="new-handle" name="handle" required placeholder="handle" pattern="[a-z0-9][a-z0-9\-]{1,38}[a-z0-9]"
+               class="bg-store-bg text-store-text border border-store-text/20 rounded-store focus:outline-none focus:ring-2 focus:ring-store-primary/40 focus:border-store-primary w-full px-3 py-2 font-mono text-sm">
+        {% else %}
+        <select id="new-handle" name="handle" required
+                class="bg-store-bg text-store-text border border-store-text/20 rounded-store focus:outline-none focus:ring-2 focus:ring-store-primary/40 focus:border-store-primary w-full px-3 py-2 font-mono text-sm">
+          {% for h in owned_handles %}<option value="{{ h }}">{{ h }}</option>{% endfor %}
+        </select>
+        {% endif %}
+      </div>
       <div>
         <label for="new-name" class="block text-store-muted text-xs mb-1">Store name</label>
         <input type="text" id="new-name" name="name" required placeholder="e.g. Acme Coffee"
                class="bg-store-bg text-store-text border border-store-text/20 rounded-store focus:outline-none focus:ring-2 focus:ring-store-primary/40 focus:border-store-primary w-full px-3 py-2">
       </div>
       <div>
-        <label for="new-slug" class="block text-store-muted text-xs mb-1">Address (URL)</label>
+        <label for="new-slug" class="block text-store-muted text-xs mb-1">Address</label>
         <div class="flex items-center gap-1">
           <span class="text-store-muted text-sm">/</span>
-          <input type="text" id="new-slug" name="slug" required placeholder="acme-coffee" pattern="[a-z0-9][a-z0-9\-]{1,38}[a-z0-9]"
+          <input type="text" id="new-slug" name="slug" required placeholder="coffee" pattern="[a-z0-9][a-z0-9\-]{1,38}[a-z0-9]"
                  class="bg-store-bg text-store-text border border-store-text/20 rounded-store focus:outline-none focus:ring-2 focus:ring-store-primary/40 focus:border-store-primary w-full px-3 py-2 font-mono text-sm">
         </div>
       </div>
@@ -94,73 +116,90 @@
     </form>
     <p id="create-status" class="text-sm mt-3 hidden"></p>
   </div>
+  {% endif %}
 
-  {% if stores %}
-  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-    {% for s in stores %}
-    {% set st = s.status or 'ready' %}
-    {% if st == 'ready' %}
-      {% set badge = 'bg-green-900/50 text-green-300 border-green-700/50' %}
-    {% elif st == 'archived' %}
-      {% set badge = 'bg-yellow-900/50 text-yellow-300 border-yellow-700/50' %}
-    {% elif st == 'provisioning' or st == 'deleting' %}
-      {% set badge = 'bg-blue-900/50 text-blue-300 border-blue-700/50' %}
-    {% else %}
-      {% set badge = 'bg-red-900/50 text-red-300 border-red-700/50' %}
-    {% endif %}
-    <article class="reveal bg-store-surface border border-store-text/10 rounded-xl p-5 flex flex-col"
-             data-store-card data-slug="{{ s.slug }}" data-name="{{ s.name }}" data-status="{{ st }}">
-      <div class="flex items-center justify-between gap-3 mb-2">
-        <h3 class="text-lg font-bold text-store-text truncate" data-store-name>{{ s.name }}</h3>
-        <span class="text-xs font-mono text-store-muted bg-store-bg px-2 py-1 rounded shrink-0">/{{ s.slug }}</span>
+  {% if namespaces %}
+    {% for ns in namespaces %}
+    <section class="mb-10 reveal">
+      <div class="flex items-center justify-between gap-3 mb-3">
+        <h2 class="text-lg font-bold text-store-text">
+          <span class="font-mono text-store-primary">/{{ ns.handle }}</span>
+          <span class="text-xs font-semibold ml-2 px-2 py-0.5 rounded-full bg-store-text/10 text-store-muted">{{ ns.role }}</span>
+        </h2>
       </div>
-      <div class="mb-4">
-        <span class="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border {{ badge }}">
-          <span class="inline-block w-1.5 h-1.5 rounded-full bg-current"></span>{{ st }}
-        </span>
+      {% if ns.stores %}
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {% for s in ns.stores %}
+        {% set st = s.status or 'ready' %}
+        {% if st == 'ready' %}{% set badge = 'bg-green-900/50 text-green-300 border-green-700/50' %}
+        {% elif st == 'archived' %}{% set badge = 'bg-yellow-900/50 text-yellow-300 border-yellow-700/50' %}
+        {% elif st in ('provisioning', 'deleting') %}{% set badge = 'bg-blue-900/50 text-blue-300 border-blue-700/50' %}
+        {% else %}{% set badge = 'bg-red-900/50 text-red-300 border-red-700/50' %}{% endif %}
+        <article class="bg-store-surface border border-store-text/10 rounded-xl p-5 flex flex-col"
+                 data-store-card data-handle="{{ s.handle }}" data-store="{{ s.store }}" data-name="{{ s.name }}" data-status="{{ st }}"
+                 data-owner="{{ 'yes' if ns.is_owner else '' }}">
+          <div class="flex items-center justify-between gap-3 mb-2">
+            <h3 class="text-lg font-bold text-store-text truncate" data-store-name>{{ s.name }}</h3>
+            <span class="text-xs font-mono text-store-muted bg-store-bg px-2 py-1 rounded shrink-0">/{{ s.handle }}/{{ s.store }}</span>
+          </div>
+          <div class="mb-4">
+            <span class="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border {{ badge }}">
+              <span class="inline-block w-1.5 h-1.5 rounded-full bg-current"></span>{{ st }}
+            </span>
+          </div>
+          {% if st == 'ready' %}
+          <div class="flex gap-2 mb-2">
+            <a href="{{ s.url }}" target="_blank" rel="noopener"
+               class="flex-1 text-center px-3 py-2 bg-store-text/10 text-store-text border border-store-text/20 rounded-store hover:bg-store-text/20 transition text-sm font-semibold">
+              <i class="fas fa-eye mr-1"></i>View
+            </a>
+            <a href="{{ s.admin_url }}"
+               class="flex-1 text-center px-3 py-2 bg-store-primary text-store-onprimary rounded-store hover:brightness-110 transition text-sm font-bold">
+              <i class="fas fa-gauge mr-1"></i>Admin
+            </a>
+          </div>
+          {% endif %}
+          {% if ns.is_owner %}
+          <div class="flex flex-wrap items-center gap-1 mt-auto pt-3 border-t border-store-text/10">
+            <button type="button" data-action="rename"
+                    class="px-3 py-1.5 text-sm text-store-muted hover:text-store-text hover:bg-store-text/10 rounded-store transition">
+              <i class="fas fa-pen mr-1"></i>Rename
+            </button>
+            {% if st == 'ready' %}
+            <button type="button" data-action="archive"
+                    class="px-3 py-1.5 text-sm text-store-muted hover:text-store-text hover:bg-store-text/10 rounded-store transition">
+              <i class="fas fa-box-archive mr-1"></i>Archive
+            </button>
+            {% elif st in ('archived', 'failed') %}
+            <button type="button" data-action="restore"
+                    class="px-3 py-1.5 text-sm text-store-muted hover:text-store-text hover:bg-store-text/10 rounded-store transition">
+              <i class="fas fa-rotate-left mr-1"></i>Restore
+            </button>
+            {% endif %}
+            {% if st == 'ready' %}
+            <a href="{{ s.team_url }}"
+               class="px-3 py-1.5 text-sm text-store-muted hover:text-store-text hover:bg-store-text/10 rounded-store transition">
+              <i class="fas fa-users mr-1"></i>Team
+            </a>
+            {% endif %}
+            <button type="button" data-action="delete"
+                    class="ml-auto px-3 py-1.5 text-sm text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-store transition">
+              <i class="fas fa-trash mr-1"></i>Delete
+            </button>
+          </div>
+          {% endif %}
+        </article>
+        {% endfor %}
       </div>
-
-      {% if st == 'ready' %}
-      <div class="flex gap-2 mb-2">
-        <a href="/{{ s.slug }}/" target="_blank" rel="noopener"
-           class="flex-1 text-center px-3 py-2 bg-store-text/10 text-store-text border border-store-text/20 rounded-store hover:bg-store-text/20 transition text-sm font-semibold">
-          <i class="fas fa-eye mr-1"></i>View
-        </a>
-        <a href="/{{ s.slug }}/admin/dashboard"
-           class="flex-1 text-center px-3 py-2 bg-store-primary text-store-onprimary rounded-store hover:brightness-110 transition text-sm font-bold">
-          <i class="fas fa-gauge mr-1"></i>Admin
-        </a>
-      </div>
+      {% else %}
+      <p class="text-store-muted text-sm">No stores in this namespace yet.</p>
       {% endif %}
-
-      <div class="flex flex-wrap items-center gap-1 mt-auto pt-3 border-t border-store-text/10">
-        <button type="button" data-action="rename"
-                class="px-3 py-1.5 text-sm text-store-muted hover:text-store-text hover:bg-store-text/10 rounded-store transition">
-          <i class="fas fa-pen mr-1"></i>Rename
-        </button>
-        {% if st == 'ready' %}
-        <button type="button" data-action="archive"
-                class="px-3 py-1.5 text-sm text-store-muted hover:text-store-text hover:bg-store-text/10 rounded-store transition">
-          <i class="fas fa-box-archive mr-1"></i>Archive
-        </button>
-        {% elif st in ('archived', 'failed') %}
-        <button type="button" data-action="restore"
-                class="px-3 py-1.5 text-sm text-store-muted hover:text-store-text hover:bg-store-text/10 rounded-store transition">
-          <i class="fas fa-rotate-left mr-1"></i>Restore
-        </button>
-        {% endif %}
-        <button type="button" data-action="delete"
-                class="ml-auto px-3 py-1.5 text-sm text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded-store transition">
-          <i class="fas fa-trash mr-1"></i>Delete
-        </button>
-      </div>
-    </article>
+    </section>
     {% endfor %}
-  </div>
   {% else %}
   <div class="reveal bg-store-surface border border-store-text/10 rounded-xl p-10 text-center text-store-muted">
     <i class="fas fa-store text-5xl mb-3 opacity-40"></i>
-    <p>No stores yet — create your first one above.</p>
+    <p>No namespaces yet — <a href="/signup" class="text-store-primary font-semibold hover:underline">claim your handle</a> to get started.</p>
   </div>
   {% endif %}
   {% endif %}
@@ -185,11 +224,11 @@
   </div>
 </div>
 
-{# ── Delete confirm modal (type slug to confirm) ───────────────────── #}
+{# ── Delete confirm modal (type address to confirm) ────────────────── #}
 <div id="delete-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60 px-4" role="dialog" aria-modal="true" aria-labelledby="delete-title">
   <div class="bg-store-surface border border-red-700/40 rounded-xl shadow-2xl w-full max-w-md p-6">
     <h3 id="delete-title" class="text-lg font-bold text-red-300 mb-1"><i class="fas fa-triangle-exclamation mr-2"></i>Delete store</h3>
-    <p class="text-store-muted text-sm mb-4">This permanently drops every collection for <span class="font-mono text-store-text" data-delete-slug></span> and cannot be undone. Type the address to confirm.</p>
+    <p class="text-store-muted text-sm mb-4">This permanently drops every collection for <span class="font-mono text-store-text" data-delete-slug></span> and cannot be undone. Type the store address to confirm.</p>
     <form id="delete-form" class="space-y-4">
       <input type="text" id="delete-input" autocomplete="off" placeholder="type the store address"
              class="bg-store-bg text-store-text border border-store-text/20 rounded-store focus:outline-none focus:ring-2 focus:ring-red-500/40 focus:border-red-500 w-full px-3 py-2 font-mono text-sm">
@@ -252,7 +291,7 @@
       var clabel = cbtn.querySelector('[data-label]');
       var nameEl = document.getElementById('new-name');
       var slugEl = document.getElementById('new-slug');
-      // Suggest a slug from the name until the admin edits the slug directly.
+      var handleEl = document.getElementById('new-handle');
       var slugEdited = false;
       slugEl.addEventListener('input', function () { slugEdited = true; });
       nameEl.addEventListener('input', function () {
@@ -270,11 +309,11 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ name: nameEl.value.trim(), slug: slugEl.value.trim() })
+            body: JSON.stringify({ handle: handleEl.value.trim(), name: nameEl.value.trim(), slug: slugEl.value.trim() })
           });
           var data = await res.json().catch(function () { return {}; });
           if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
-          status.textContent = 'Created ' + data.slug + ' — reloading…';
+          status.textContent = 'Created /' + data.handle + '/' + data.store + ' — reloading…';
           status.className = 'text-sm mt-3 text-green-400';
           setTimeout(function () { window.location.reload(); }, 700);
         } catch (err) {
@@ -311,7 +350,10 @@
       return data;
     }
 
-    // ── Modal helpers ──────────────────────────────────────────────
+    function base(handle, store) {
+      return '/manage/stores/' + encodeURIComponent(handle) + '/' + encodeURIComponent(store);
+    }
+
     function openModal(el) { el.classList.remove('hidden'); el.classList.add('flex'); }
     function closeModal(el) { el.classList.add('hidden'); el.classList.remove('flex'); }
     document.querySelectorAll('[data-close]').forEach(function (btn) {
@@ -332,71 +374,68 @@
       }
     });
 
-    // ── Rename ─────────────────────────────────────────────────────
     var renameModal = document.getElementById('rename-modal');
     var renameForm = document.getElementById('rename-form');
     var renameInput = document.getElementById('rename-input');
-    var renameSlug = null;
+    var renameTarget = null;
     if (renameForm) {
       renameForm.addEventListener('submit', async function (ev) {
         ev.preventDefault();
         var name = renameInput.value.trim();
-        if (!name || !renameSlug) return;
+        if (!name || !renameTarget) return;
         try {
-          await api('PATCH', '/manage/stores/' + encodeURIComponent(renameSlug), { name: name });
+          await api('PATCH', base(renameTarget.handle, renameTarget.store), { name: name });
           toast('Renamed to “' + name + '”');
           setTimeout(function () { window.location.reload(); }, 500);
         } catch (err) { toast(String((err && err.message) || err), false); }
       });
     }
 
-    // ── Delete (type-to-confirm) ───────────────────────────────────
     var deleteModal = document.getElementById('delete-modal');
     var deleteForm = document.getElementById('delete-form');
     var deleteInput = document.getElementById('delete-input');
     var deleteConfirm = document.getElementById('delete-confirm');
-    var deleteSlug = null;
+    var deleteTarget = null;
     if (deleteForm) {
       deleteInput.addEventListener('input', function () {
-        deleteConfirm.disabled = deleteInput.value.trim() !== deleteSlug;
+        deleteConfirm.disabled = !deleteTarget || deleteInput.value.trim() !== deleteTarget.store;
       });
       deleteForm.addEventListener('submit', async function (ev) {
         ev.preventDefault();
-        if (deleteInput.value.trim() !== deleteSlug) return;
+        if (!deleteTarget || deleteInput.value.trim() !== deleteTarget.store) return;
         try {
-          var data = await api('DELETE', '/manage/stores/' + encodeURIComponent(deleteSlug), { confirm: deleteSlug });
-          toast('Deleted ' + deleteSlug + ' (' + (data.dropped ? data.dropped.length : 0) + ' collections)');
+          var data = await api('DELETE', base(deleteTarget.handle, deleteTarget.store), { confirm: deleteTarget.store });
+          toast('Deleted /' + deleteTarget.handle + '/' + deleteTarget.store + ' (' + (data.dropped ? data.dropped.length : 0) + ' collections)');
           setTimeout(function () { window.location.reload(); }, 600);
         } catch (err) { toast(String((err && err.message) || err), false); }
       });
     }
 
-    // ── Card action delegation ─────────────────────────────────────
     document.querySelectorAll('[data-store-card]').forEach(function (card) {
-      var slug = card.getAttribute('data-slug');
+      var handle = card.getAttribute('data-handle');
+      var store = card.getAttribute('data-store');
       var name = card.getAttribute('data-name');
       card.querySelectorAll('[data-action]').forEach(function (btn) {
         btn.addEventListener('click', async function () {
           var action = btn.getAttribute('data-action');
           if (action === 'rename') {
-            renameSlug = slug;
+            renameTarget = { handle: handle, store: store };
             renameInput.value = name || '';
-            renameModal.querySelector('[data-rename-slug]').textContent = '/' + slug;
+            renameModal.querySelector('[data-rename-slug]').textContent = '/' + handle + '/' + store;
             openModal(renameModal);
-            renameInput.focus();
-            renameInput.select();
+            renameInput.focus(); renameInput.select();
           } else if (action === 'delete') {
-            deleteSlug = slug;
+            deleteTarget = { handle: handle, store: store };
             deleteInput.value = '';
             deleteConfirm.disabled = true;
-            deleteModal.querySelector('[data-delete-slug]').textContent = '/' + slug;
+            deleteModal.querySelector('[data-delete-slug]').textContent = '/' + handle + '/' + store;
             openModal(deleteModal);
             deleteInput.focus();
           } else if (action === 'archive' || action === 'restore') {
             btn.setAttribute('aria-busy', 'true');
             try {
-              await api('POST', '/manage/stores/' + encodeURIComponent(slug) + '/' + action);
-              toast(action === 'archive' ? ('Archived ' + slug) : ('Restored ' + slug));
+              await api('POST', base(handle, store) + '/' + action);
+              toast(action === 'archive' ? ('Archived /' + handle + '/' + store) : ('Restored /' + handle + '/' + store));
               setTimeout(function () { window.location.reload(); }, 500);
             } catch (err) {
               toast(String((err && err.message) || err), false);
@@ -407,7 +446,6 @@
       });
     });
 
-    // ── Reconcile ──────────────────────────────────────────────────
     var reconcileBtn = document.getElementById('reconcile-btn');
     if (reconcileBtn) {
       var rlabel = reconcileBtn.querySelector('[data-label]');

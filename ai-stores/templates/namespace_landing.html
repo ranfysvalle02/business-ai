@@ -1,0 +1,47 @@
+{% extends "_base.html" %}
+
+{%- set store = {} -%}
+{% set seo_title = '/' ~ handle ~ ' — AI Stores' %}
+
+{% block header %}
+<header class="bg-store-surface border-b-2 border-store-primary">
+  <div class="container mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
+    <span class="text-store-text font-bold truncate"><span class="font-mono text-store-primary">/{{ handle }}</span></span>
+    {% if can_manage %}
+    <a href="/manage" class="px-4 py-2 bg-store-primary text-store-onprimary rounded-md text-sm font-semibold hover:brightness-110 transition">
+      <i class="fas fa-gauge mr-2"></i>Manage
+    </a>
+    {% endif %}
+  </div>
+</header>
+{% endblock %}
+
+{% block footer %}{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-12 sm:py-16 max-w-4xl">
+  <div class="text-center mb-10 reveal">
+    <h1 class="text-3xl sm:text-5xl font-extrabold text-store-text"><span class="font-mono text-store-primary">/{{ handle }}</span></h1>
+    <p class="mt-2 text-store-muted">Stores published under this namespace.</p>
+  </div>
+
+  {% if stores %}
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    {% for s in stores %}
+    <a href="{{ s.url }}" class="reveal bg-store-surface border border-store-text/10 rounded-xl p-6 hover:border-store-primary/60 transition group">
+      <div class="flex items-center justify-between gap-3">
+        <h2 class="text-xl font-bold text-store-text group-hover:text-store-primary transition truncate">{{ s.name }}</h2>
+        <i class="fas fa-arrow-right text-store-muted group-hover:text-store-primary transition"></i>
+      </div>
+      <p class="text-xs font-mono text-store-muted mt-2">/{{ s.handle }}/{{ s.store }}</p>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="reveal bg-store-surface border border-store-text/10 rounded-xl p-10 text-center text-store-muted">
+    <i class="fas fa-store text-5xl mb-3 opacity-40"></i>
+    <p>No published stores here yet.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

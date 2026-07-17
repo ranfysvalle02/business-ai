@@ -1,0 +1,150 @@
+{% extends "_base.html" %}
+
+{%- set store = (store[0] if store is sequence and not store is mapping and store else store) or {} -%}
+{% set seo_title = 'Team — ' ~ (store.name or 'AI Stores') %}
+{% set robots    = 'noindex,nofollow' %}
+{% set nav_mode  = 'admin' %}
+
+{% block content %}
+<div class="container mx-auto px-4 sm:px-6 py-6 sm:py-10 max-w-3xl">
+  <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 sm:mb-8 gap-4 reveal">
+    <div>
+      <h1 class="text-2xl sm:text-4xl font-bold">Team</h1>
+      <p class="text-gray-400 mt-1">Members of <span class="font-mono text-store-primary">/{{ handle }}</span> — roles apply across every store in this namespace.</p>
+    </div>
+    <a href="{{ base_path }}/admin/dashboard" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded-lg transition-colors text-center">
+      <i class="fas fa-arrow-left mr-2"></i>Dashboard
+    </a>
+  </div>
+
+  {# ── Invite ─────────────────────────────────────────────────────── #}
+  <div class="reveal bg-gray-800 border border-gray-700 rounded-xl p-4 sm:p-6 mb-6">
+    <h2 class="text-lg font-bold mb-4"><i class="fas fa-user-plus mr-2"></i>Invite a teammate</h2>
+    <form id="invite-form" class="grid grid-cols-1 sm:grid-cols-[1fr_auto_auto] gap-3 items-end">
+      <div>
+        <label for="invite-email" class="block text-gray-400 text-sm mb-1">Email</label>
+        <input type="email" id="invite-email" required placeholder="teammate@example.com"
+               class="w-full px-3 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div>
+        <label for="invite-role" class="block text-gray-400 text-sm mb-1">Role</label>
+        <select id="invite-role" class="px-3 py-2 bg-gray-700 border border-gray-600 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+          {% for r in roles %}<option value="{{ r }}"{% if r == 'viewer' %} selected{% endif %}>{{ r }}</option>{% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="store-btn px-5 py-2 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors h-[42px]">
+        <i class="fas fa-paper-plane mr-2"></i>Invite
+      </button>
+    </form>
+    <div id="invite-result" class="hidden mt-4 text-sm bg-gray-900 border border-gray-700 rounded-lg p-3">
+      <p class="text-gray-400 mb-1">Share this invite link:</p>
+      <input id="invite-link" readonly class="w-full px-3 py-2 bg-gray-800 border border-gray-600 text-white rounded-lg font-mono text-xs">
+    </div>
+    <p id="invite-status" class="text-sm mt-3 hidden"></p>
+  </div>
+
+  {# ── Members ────────────────────────────────────────────────────── #}
+  <div class="reveal bg-gray-800 border border-gray-700 rounded-xl overflow-hidden">
+    <div class="p-4 border-b border-gray-700 flex justify-between items-center">
+      <h2 class="text-lg font-bold">Members</h2>
+      <span class="text-gray-400 text-sm">{{ members|length }} total</span>
+    </div>
+    <div id="members-list">
+      {% for m in members %}
+      <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-700/50" data-member data-email="{{ m.email }}">
+        <div class="min-w-0">
+          <p class="text-white font-semibold truncate">{{ m.email }}</p>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <select data-role class="px-2 py-1 bg-gray-700 border border-gray-600 text-white rounded text-sm">
+            {% for r in roles %}<option value="{{ r }}"{% if r == m.role %} selected{% endif %}>{{ r }}</option>{% endfor %}
+          </select>
+          <button type="button" data-remove class="px-2 py-1 text-red-400 hover:text-red-300 hover:bg-red-900/30 rounded text-sm" title="Remove">
+            <i class="fas fa-trash"></i>
+          </button>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div id="store-toast" class="store-toast" role="status" aria-live="polite"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  (function () {
+    var BP = window.BASE_PATH || '';
+    var toastEl = document.getElementById('store-toast');
+    function toast(msg, ok) {
+      if (!toastEl) return;
+      toastEl.textContent = msg;
+      toastEl.classList.remove('is-ok', 'is-err', 'is-show');
+      toastEl.classList.add(ok === false ? 'is-err' : 'is-ok');
+      requestAnimationFrame(function () { toastEl.classList.add('is-show'); });
+      setTimeout(function () { toastEl.classList.remove('is-show'); }, 3200);
+    }
+    async function api(method, path, body) {
+      var res = await fetch(BP + path, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: body ? JSON.stringify(body) : undefined
+      });
+      var data = await res.json().catch(function () { return {}; });
+      if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+      return data;
+    }
+
+    var inviteForm = document.getElementById('invite-form');
+    if (inviteForm) {
+      var status = document.getElementById('invite-status');
+      var resultBox = document.getElementById('invite-result');
+      var linkEl = document.getElementById('invite-link');
+      inviteForm.addEventListener('submit', async function (ev) {
+        ev.preventDefault();
+        status.classList.add('hidden');
+        try {
+          var data = await api('POST', '/admin/team/invite', {
+            email: document.getElementById('invite-email').value.trim(),
+            role: document.getElementById('invite-role').value
+          });
+          linkEl.value = window.location.origin + data.invite_url;
+          resultBox.classList.remove('hidden');
+          toast('Invite created for ' + data.email);
+          inviteForm.reset();
+        } catch (err) {
+          status.textContent = String((err && err.message) || err);
+          status.className = 'text-sm mt-3 text-red-400';
+          status.classList.remove('hidden');
+        }
+      });
+    }
+
+    document.querySelectorAll('[data-member]').forEach(function (row) {
+      var email = row.getAttribute('data-email');
+      var roleSel = row.querySelector('[data-role]');
+      var prev = roleSel.value;
+      roleSel.addEventListener('change', async function () {
+        try {
+          await api('PATCH', '/admin/team/members', { email: email, role: roleSel.value });
+          prev = roleSel.value;
+          toast('Updated ' + email + ' → ' + roleSel.value);
+        } catch (err) {
+          roleSel.value = prev;
+          toast(String((err && err.message) || err), false);
+        }
+      });
+      row.querySelector('[data-remove]').addEventListener('click', async function () {
+        if (!confirm('Remove ' + email + ' from /{{ handle }}?')) return;
+        try {
+          await api('DELETE', '/admin/team/members', { email: email });
+          row.remove();
+          toast('Removed ' + email);
+        } catch (err) { toast(String((err && err.message) || err), false); }
+      });
+    });
+  })();
+</script>
+{% endblock %}

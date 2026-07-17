@@ -2,9 +2,10 @@
 #
 #   make init             # one-time: create .env with real generated secrets
 #   make up               # build + run in the foreground (Ctrl-C to stop)
-#   make provision-store SLUG=acme NAME="Acme Co"   # add a store at runtime
+#   make provision-store HANDLE=acme STORE=coffee NAME="Acme Coffee"  # add a store
 #
-# One instance serves many stores at /{store}; adding a store never redeploys.
+# One instance serves many stores at /{handle}/{store}; adding a store never
+# redeploys. The .env admin is the platform superuser used by these targets.
 # Everything here is a thin, self-documenting shim; the source of truth is
 # still docker-compose.yml / Dockerfile.
 
@@ -86,32 +87,32 @@ test-deps: ## Install the test/dev dependencies (pytest, pytest-asyncio, asgi-li
 test: ## Run the pytest suite in-process (needs a local Mongo on :27017; see test-deps)
 	$(PY) -m pytest
 
-provision-store: ## Create a store on a running instance: make provision-store SLUG=acme NAME="Acme Co"
-	@test -n "$(SLUG)" || { echo 'Usage: make provision-store SLUG=acme NAME="Acme Co"'; exit 1; }
+provision-store: ## Create a store: make provision-store HANDLE=acme STORE=coffee NAME="Acme Coffee"
+	@test -n "$(HANDLE)" -a -n "$(STORE)" || { echo 'Usage: make provision-store HANDLE=acme STORE=coffee NAME="Acme Coffee"'; exit 1; }
 	@$(login_admin); \
-	 echo "Provisioning '$(SLUG)' at $$BASE ..."; \
+	 echo "Provisioning '/$(HANDLE)/$(STORE)' at $$BASE ..."; \
 	 curl -s -b $$JAR -H 'Content-Type: application/json' \
-	   -d "{\"slug\":\"$(SLUG)\",\"name\":\"$(NAME)\"}" $$BASE/manage/stores; \
+	   -d "{\"handle\":\"$(HANDLE)\",\"slug\":\"$(STORE)\",\"name\":\"$(NAME)\"}" $$BASE/manage/stores; \
 	 echo; rm -f $$JAR
 
-archive-store: ## Suspend a store (stops routing, keeps data): make archive-store SLUG=acme
-	@test -n "$(SLUG)" || { echo 'Usage: make archive-store SLUG=acme'; exit 1; }
+archive-store: ## Suspend a store (stops routing, keeps data): make archive-store HANDLE=acme STORE=coffee
+	@test -n "$(HANDLE)" -a -n "$(STORE)" || { echo 'Usage: make archive-store HANDLE=acme STORE=coffee'; exit 1; }
 	@$(login_admin); \
-	 curl -s -b $$JAR -X POST $$BASE/manage/stores/$(SLUG)/archive; \
+	 curl -s -b $$JAR -X POST $$BASE/manage/stores/$(HANDLE)/$(STORE)/archive; \
 	 echo; rm -f $$JAR
 
-restore-store: ## Re-enable an archived/failed store: make restore-store SLUG=acme
-	@test -n "$(SLUG)" || { echo 'Usage: make restore-store SLUG=acme'; exit 1; }
+restore-store: ## Re-enable an archived/failed store: make restore-store HANDLE=acme STORE=coffee
+	@test -n "$(HANDLE)" -a -n "$(STORE)" || { echo 'Usage: make restore-store HANDLE=acme STORE=coffee'; exit 1; }
 	@$(login_admin); \
-	 curl -s -b $$JAR -X POST $$BASE/manage/stores/$(SLUG)/restore; \
+	 curl -s -b $$JAR -X POST $$BASE/manage/stores/$(HANDLE)/$(STORE)/restore; \
 	 echo; rm -f $$JAR
 
-delete-store: ## Permanently deprovision a store (drops all data): make delete-store SLUG=acme
-	@test -n "$(SLUG)" || { echo 'Usage: make delete-store SLUG=acme'; exit 1; }
+delete-store: ## Permanently deprovision a store (drops all data): make delete-store HANDLE=acme STORE=coffee
+	@test -n "$(HANDLE)" -a -n "$(STORE)" || { echo 'Usage: make delete-store HANDLE=acme STORE=coffee'; exit 1; }
 	@$(login_admin); \
-	 echo "Deleting '$(SLUG)' at $$BASE (irreversible) ..."; \
+	 echo "Deleting '/$(HANDLE)/$(STORE)' at $$BASE (irreversible) ..."; \
 	 curl -s -b $$JAR -X DELETE -H 'Content-Type: application/json' \
-	   -d "{\"confirm\":\"$(SLUG)\"}" $$BASE/manage/stores/$(SLUG); \
+	   -d "{\"confirm\":\"$(STORE)\"}" $$BASE/manage/stores/$(HANDLE)/$(STORE); \
 	 echo; rm -f $$JAR
 
 reconcile: ## Finish stuck provisions/deletes and report orphans (DROP_ORPHANS=1 to drop them)

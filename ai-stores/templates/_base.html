@@ -1,9 +1,9 @@
 {#- Normalise `store` so templates can use `store.field` regardless of SSR shape -#}
 {%- set store = (store[0] if store is sequence and not store is mapping and store else store) or {} -%}
-{#- Multi-tenant base path: "/{store}" for storefront/admin pages, "" for platform pages.
-    Every internal link/fetch is prefixed with this; /static/* stays global. -#}
-{%- set _store_slug = (request.scope.get('store_slug') if request is defined and request else None) -%}
-{%- set base_path = ('/' ~ _store_slug) if _store_slug else '' -%}
+{#- Multi-tenant base path: "/{handle}/{store}" for storefront/admin pages, "" for
+    platform pages. Comes from the request root_path the store-scope middleware
+    sets. Every internal link/fetch is prefixed with this; /static/* stays global. -#}
+{%- set base_path = ((request.scope.get('root_path') if request is defined and request else '') or '') -%}
 {#- hex "#6366f1" -> "99 102 241" so Tailwind opacity works: rgb(var(--x) / <alpha>) -#}
 {%- macro rgbch(hex, fallback='#000000') -%}
 {%- set h = ((hex or fallback) | string | trim | replace('#','')) -%}

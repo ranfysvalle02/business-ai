@@ -33,6 +33,8 @@ os.environ.setdefault("INQUIRY_RATELIMIT_PER_MIN", "100000")
 os.environ.setdefault("INQUIRY_RATELIMIT_PER_HOUR", "100000")
 os.environ.setdefault("AI_RATELIMIT_PER_MIN", "100000")
 os.environ.setdefault("UPLOAD_RATELIMIT_PER_MIN", "100000")
+os.environ.setdefault("SIGNUP_RATELIMIT_PER_MIN", "100000")
+os.environ.setdefault("SIGNUP_RATELIMIT_PER_HOUR", "100000")
 # Notifications off by default in tests (no outbound HTTP).
 os.environ.pop("RESEND_API_KEY", None)
 
@@ -43,6 +45,14 @@ from asgi_lifespan import LifespanManager  # noqa: E402
 
 ADMIN_EMAIL = os.environ["ADMIN_EMAIL"]
 ADMIN_PASSWORD = os.environ["ADMIN_PASSWORD"]
+
+# Non-admin namespace members used across the RBAC/namespace suites.
+OWNER_EMAIL = "owner@acme.test"
+OWNER_PASSWORD = "owner-password-123"
+VIEWER_EMAIL = "viewer@acme.test"
+VIEWER_PASSWORD = "viewer-password-123"
+OUTSIDER_EMAIL = "outsider@nowhere.test"
+OUTSIDER_PASSWORD = "outsider-password-123"
 
 
 @pytest.fixture(scope="session")
@@ -73,12 +83,39 @@ async def app():
 
 @pytest_asyncio.fixture(scope="session")
 async def stores(app):
-    """Provision two isolated stores (acme, beta) once for the session."""
-    import main
+    """Provision the session's namespaces, members, and non-admin users.
 
-    await main.provision_store(app.state.engine, "acme", "Acme Co")
-    await main.provision_store(app.state.engine, "beta", "Beta LLC")
-    return ["acme", "beta"]
+    Layout (per-user namespaces at /{handle}/{store}):
+      * ``acme/shop`` + ``acme/wholesale`` — one owner (OWNER_EMAIL) owns both.
+      * ``globex/shop`` — a separate namespace (owner OWNER of globex).
+    A ``viewer`` of ``acme`` and an unaffiliated ``outsider`` user are seeded
+    so the RBAC suites can log in as each role.
+    """
+    import main
+    from mdb_engine.auth.users import create_app_user
+
+    engine = app.state.engine
+    await main.provision_store(engine, "acme", "shop", "Acme Shop", owner_email=OWNER_EMAIL)
+    await main.provision_store(engine, "acme", "wholesale", "Acme Wholesale", owner_email=OWNER_EMAIL)
+    await main.provision_store(engine, "globex", "shop", "Globex Shop", owner_email="owner@globex.test")
+
+    pdb = await main._platform_db(engine)
+    # Non-admin users (role="member"); memberships drive per-namespace authz.
+    for email, password in (
+        (OWNER_EMAIL, OWNER_PASSWORD),
+        (VIEWER_EMAIL, VIEWER_PASSWORD),
+        (OUTSIDER_EMAIL, OUTSIDER_PASSWORD),
+    ):
+        await create_app_user(pdb, email, password, role="member")
+    members = pdb["namespace_members"]
+    await main.rbac.add_member(members, "acme", OWNER_EMAIL, "owner")
+    await main.rbac.add_member(members, "acme", VIEWER_EMAIL, "viewer")
+    await main.rbac.add_member(members, "globex", "owner@globex.test", "owner")
+    return {
+        "acme_shop": ("acme", "shop"),
+        "acme_wholesale": ("acme", "wholesale"),
+        "globex_shop": ("globex", "shop"),
+    }
 
 
 def _make_client(app) -> httpx.AsyncClient:
@@ -88,16 +125,51 @@ def _make_client(app) -> httpx.AsyncClient:
     )
 
 
+async def _login_client(app, email: str, password: str) -> httpx.AsyncClient:
+    client = _make_client(app)
+    res = await client.post("/auth/login", json={"email": email, "password": password})
+    assert res.status_code < 300, f"login failed for {email}: {res.status_code} {res.text}"
+    return client
+
+
 @pytest_asyncio.fixture(scope="session")
 async def admin_client(app):
-    """A client authenticated as the shared admin (logs in exactly once)."""
-    async with _make_client(app) as client:
-        res = await client.post(
-            "/auth/login",
-            json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
-        )
-        assert res.status_code < 300, f"admin login failed: {res.status_code} {res.text}"
+    """A client authenticated as the platform superuser (logs in once)."""
+    client = await _login_client(app, ADMIN_EMAIL, ADMIN_PASSWORD)
+    try:
         yield client
+    finally:
+        await client.aclose()
+
+
+@pytest_asyncio.fixture(scope="session")
+async def owner_client(app, stores):
+    """A client authenticated as the owner of the ``acme`` namespace."""
+    client = await _login_client(app, OWNER_EMAIL, OWNER_PASSWORD)
+    try:
+        yield client
+    finally:
+        await client.aclose()
+
+
+@pytest_asyncio.fixture(scope="session")
+async def viewer_client(app, stores):
+    """A client authenticated as a read-only viewer of the ``acme`` namespace."""
+    client = await _login_client(app, VIEWER_EMAIL, VIEWER_PASSWORD)
+    try:
+        yield client
+    finally:
+        await client.aclose()
+
+
+@pytest_asyncio.fixture(scope="session")
+async def outsider_client(app, stores):
+    """A logged-in user who is a member of no namespace."""
+    client = await _login_client(app, OUTSIDER_EMAIL, OUTSIDER_PASSWORD)
+    try:
+        yield client
+    finally:
+        await client.aclose()
 
 
 @pytest_asyncio.fixture()

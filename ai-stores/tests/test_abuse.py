@@ -7,7 +7,7 @@ import uuid
 async def test_honeypot_silently_drops(admin_client, anon_client, stores):
     marker = f"honey-{uuid.uuid4().hex[:8]}"
     res = await anon_client.post(
-        "/acme/api/submit-inquiry",
+        "/acme/shop/api/submit-inquiry",
         json={
             "customer_name": marker,
             "customer_contact": "bot@example.com",
@@ -17,7 +17,7 @@ async def test_honeypot_silently_drops(admin_client, anon_client, stores):
     )
     # The bot gets a convincing 201, but nothing is stored.
     assert res.status_code == 201, res.text
-    inq = await admin_client.get("/acme/api/inquiries")
+    inq = await admin_client.get("/acme/shop/api/inquiries")
     assert marker not in inq.text
 
 
@@ -26,8 +26,9 @@ async def test_inquiry_rate_limit_returns_429(app, anon_client, stores):
 
     # Override just the inquiry limit to a tiny, long window for determinism,
     # scoped to a dedicated store so no other test's counts interfere.
-    slug = f"rl{uuid.uuid4().hex[:6]}"
-    await main.provision_store(app.state.engine, slug, "Rate Limited")
+    handle = f"rl{uuid.uuid4().hex[:6]}"
+    store = "shop"
+    await main.provision_store(app.state.engine, handle, store, "Rate Limited")
 
     from mdb_engine.auth.rate_limiter import RateLimit
 
@@ -37,7 +38,7 @@ async def test_inquiry_rate_limit_returns_429(app, anon_client, stores):
         statuses = []
         for i in range(4):
             r = await anon_client.post(
-                f"/{slug}/api/submit-inquiry",
+                f"/{handle}/{store}/api/submit-inquiry",
                 json={"customer_name": f"rl-{i}", "customer_contact": "x@example.com"},
             )
             statuses.append(r.status_code)

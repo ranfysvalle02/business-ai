@@ -1,20 +1,27 @@
 # AI Stores
 
-A single app instance that serves **many storefronts** at `stores.com/{store}`,
-managed by **one shared admin** — no redeploy to add a store. Built as a thin
-shell over [`mdb-engine`](blog.md): the domain (collections, auto-CRUD, auth, SSR
-routes, indexes, admin plane) is declared in [`manifest.json`](manifest.json);
-[`main.py`](main.py) adds only what makes it multi-tenant.
+A single app instance that serves **many storefronts** at
+`stores.com/{handle}/{store}`, where anyone can **claim a handle** (their
+namespace) and open stores under it — no redeploy to add a store. Built as a
+thin shell over [`mdb-engine`](blog.md): the domain (collections, auto-CRUD,
+auth, SSR routes, indexes, admin plane) is declared in
+[`manifest.json`](manifest.json); [`main.py`](main.py) adds only what makes it
+multi-tenant, plus [`rbac.py`](rbac.py) for per-namespace roles.
 
-- **Path-based multi-tenancy.** The first URL segment picks the store; the
-  request is scoped to that store's data for its whole lifetime.
-- **Dynamic stores.** Create a store from the UI at `/manage` (or the API); it's
-  seeded, indexed, and live in one request. Rename, archive/restore, and
-  delete/deprovision from the same console — no redeploy.
-- **Shared admin.** One login manages every store. Auth is global; only data is
-  scoped.
-- **Isolated data.** The engine prefixes each store's collections (`acme_items`)
-  and tags docs with an `app_id`, so stores can't see each other.
+- **Per-user namespaces.** The first URL segment is a user's **handle**, the
+  second is a **store** under it (`/acme/coffee`). One user owns many stores;
+  `/acme/` is a public landing listing that handle's stores.
+- **Self-serve signup.** Anyone can `/signup` to claim a globally unique handle
+  and open their first store — created, seeded, indexed, and live in one request.
+- **Layered RBAC.** Identity stays global (one `users` pool + cookie);
+  authorization is layered **per namespace** — `owner`/`editor`/`viewer` roles
+  in `namespace_members` map to the engine's effective roles. The seeded
+  `ADMIN_EMAIL` is a **platform superuser** with access to every namespace.
+- **Public storefronts stay public.** Viewing a store and submitting an inquiry
+  never require membership; only writes and admin surfaces are gated.
+- **Isolated data.** The engine prefixes each store's collections
+  (`acme__coffee_items`) and tags docs with an `app_id`, so stores can't see
+  each other — across handles *or* within one.
 
 ---
 
@@ -27,91 +34,116 @@ make up          # build + run at http://localhost:8000
 make ai-pull     # (optional) pull the local model for the AI editor
 ```
 
-On first boot with an empty database, a **`demo`** store is provisioned
-automatically. Open:
+On first boot with an empty database, a **`demo/shop`** store is provisioned
+automatically (owned by the platform admin). Open:
 
-- `http://localhost:8000/` → redirects to a store (or `/manage` if none exist)
-- `http://localhost:8000/manage` → sign in as the shared admin, create stores
-- `http://localhost:8000/demo/` → the demo storefront
-- `http://localhost:8000/demo/admin/dashboard` → that store's admin
+- `http://localhost:8000/` → redirects to `/manage`
+- `http://localhost:8000/manage` → sign in (superuser or namespace member)
+- `http://localhost:8000/signup` → claim a handle + open your first store
+- `http://localhost:8000/demo/` → the `demo` namespace landing
+- `http://localhost:8000/demo/shop/` → the demo storefront
+- `http://localhost:8000/demo/shop/admin/dashboard` → that store's admin
 
 Default admin credentials come from `.env` (`ADMIN_EMAIL` / `ADMIN_PASSWORD`) —
-change them before exposing anything.
+change them before exposing anything. That account is the platform superuser.
 
 ---
 
 ## How it works
 
 ```
-GET /acme/admin/items
+GET /acme/coffee/admin/items
       │
       ▼
-StoreScopeMiddleware ── first segment "acme" is a known store
-      │  sets scope[store_slug]=acme, root_path=/acme
+StoreScopeMiddleware ── "acme" is a known handle, "coffee" a known store
+      │  sets scope[handle]=acme, scope[store]=coffee,
+      │  scope[store_slug]=acme__coffee, root_path=/acme/coffee
       ▼
-engine auth middleware ── resolves the ONE global admin (path-agnostic)
+engine auth middleware ── resolves the ONE global identity (path-agnostic)
       │
+      ▼
+StoreRoleOverlayMiddleware ── membership(acme, user) → user_roles;
+      │  hard-blocks non-members on /admin/* only (public reads pass)
       ▼
 router ── matches /admin/items (root_path stripped)
       │
       ▼
-Depends(get_scoped_db) override ── returns get_scoped_db("acme")
+Depends(get_scoped_db) override ── returns get_scoped_db("acme__coffee")
       │
       ▼
-reads/writes acme_items  (app_id = acme)
+reads/writes acme__coffee_items  (app_id = acme__coffee)
 ```
 
-Three pieces in [`main.py`](main.py):
+Pieces in [`main.py`](main.py) + [`rbac.py`](rbac.py):
 
-1. **`StoreScopeMiddleware`** resolves `/{store}/...` to a per-request scope by
-   setting `root_path`. Existing engine routes match on the stripped path, while
-   `request.url`/`base_url` keep the prefix so canonical URLs, sitemaps, and OG
-   tags stay per-store correct.
+1. **`StoreScopeMiddleware`** resolves `/{handle}/{store}/...` to a per-request
+   scope by setting `root_path`. Existing engine routes match on the stripped
+   path, while `request.url`/`base_url` keep the prefix so canonical URLs,
+   sitemaps, and OG tags stay per-store correct. Unknown handle/store → 404;
+   `/{handle}/` (no store) → a public namespace landing.
 2. **`get_scoped_db` override** re-scopes the one dependency every data path uses
    (SSR pages, auto-CRUD `/api/*`, feeds, custom endpoints).
 3. **Auth stays global** — one `users` pool in the platform scope, one cookie,
    valid on every store.
+4. **`StoreRoleOverlayMiddleware`** layers per-namespace RBAC: it rewrites the
+   caller's effective `user_roles` from their membership of the handle (gating
+   `/api` writes) and hard-blocks non-members on the store's `/admin/*` surface —
+   never on a public read. See [`rbac.py`](rbac.py) for the role mapping.
 
 ### Scopes
 
-- **Platform scope** (`= manifest slug`): global admin `users`, `store_registry`.
-- **Store scope** (per slug): `stores` singleton, `items`, `sections`,
-  `specials`, `slideshow`, `inquiries`.
-- **Reserved first segments** (never a store): `static`, `__mdb`, `health`,
-  `favicon.ico`, `robots.txt`, `auth`, `manage`.
+- **Platform scope** (`= manifest slug`): global `users`, `store_registry`,
+  `namespace_members`, `audit_log`.
+- **Store scope** (per `{handle}__{store}`): `stores` singleton, `items`,
+  `sections`, `specials`, `slideshow`, `inquiries`.
+- **Reserved first segments** (never a handle): `static`, `__mdb`, `health`,
+  `favicon.ico`, `robots.txt`, `auth`, `manage`, `signup`.
+
+### Roles
+
+| Role | Scope | Can |
+| --- | --- | --- |
+| **platform superuser** (`ADMIN_EMAIL`) | every namespace | everything, incl. `/manage` all-namespace ops + reconcile |
+| **owner** | one handle | edit content, create/delete stores, manage team |
+| **editor** | one handle | edit store content |
+| **viewer** | one handle | read-only admin (writes 403) |
+| **non-member / anon** | — | browse storefronts + submit inquiries only |
 
 ---
 
 ## Creating a store
 
-**From the UI:** sign in at `/manage`, enter a name, submit. The slug is
-suggested from the name and validated (`^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$`).
+**Self-serve (new users):** open `/signup`, pick a globally unique **handle**,
+an email/password, and a first store slug. This creates a non-admin `member`
+user, provisions `{handle}__{store}`, and makes you the `owner` of the handle.
 
-**From the CLI** (against a running instance, using `.env` admin creds):
+**From the UI (existing owner/superuser):** sign in at `/manage`, pick a handle
+you own, enter a name, submit. The store slug is suggested from the name and
+validated (`^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$`); handles are validated the same
+way and are globally unique.
 
-```bash
-make provision-store SLUG=acme NAME="Acme Co"
-```
-
-**From the API** (admin session required):
+**From the API** (owner of the handle, or superuser):
 
 ```bash
 curl -b cookies.txt -H 'Content-Type: application/json' \
-  -d '{"slug":"acme","name":"Acme Co"}' \
+  -d '{"handle":"acme","slug":"coffee","name":"Acme Coffee"}' \
   http://localhost:8000/manage/stores
 ```
 
-Provisioning (`provision_store`) is idempotent and step-logged: validate slug →
-**register the store in `store_registry` with `status: "provisioning"`** →
-`get_scoped_db(slug)` → create indexes → seed [`store_template.json`](store_template.json)
-additively → **flip `status` to `"ready"`**. Writing the registry row *first*
-means a mid-way failure never leaves orphan `{slug}_*` collections unaccounted
-for — the row stays `provisioning` and a re-run (or the reconciler) finishes it
-safely. Re-running never clobbers admin edits.
+Provisioning (`provision_store`) is idempotent and step-logged: validate handle
++ slug → **register the store in `store_registry` with `status: "provisioning"`**
+→ `get_scoped_db("{handle}__{store}")` → create indexes → seed
+[`store_template.json`](store_template.json) additively → **flip `status` to
+`"ready"`**. Writing the registry row *first* means a mid-way failure never
+leaves orphan `{handle}__{store}_*` collections unaccounted for — the row stays
+`provisioning` and a re-run (or the reconciler) finishes it safely. Re-running
+never clobbers admin edits.
 
 Editing storefront content is per store: catalog, layout, slideshow, specials,
-and inquiries all live under `/{store}/admin/*`, and the conversational **AI
-editor** (local Ollama) edits only the active store.
+and inquiries all live under `/{handle}/{store}/admin/*`, and the conversational
+**AI editor** (local Ollama) edits only the active store. Team membership lives
+per handle at `/{handle}/{store}/admin/team` (owner-gated) — invites are signed
+JWTs accepted at `/manage/invite`.
 
 ---
 
@@ -126,15 +158,17 @@ lifecycle from `/manage` or the API (all admin-only, and mirrored by
 
 | Action | Endpoint | Effect |
 | --- | --- | --- |
-| Rename | `PATCH /manage/stores/{slug}` `{name}` | Changes the display name on the registry and the store's `stores` singleton. The address/slug is immutable (changing it would break bookmarks and canonical URLs). |
-| Archive | `POST /manage/stores/{slug}/archive` | Suspends the store: it stops routing (404s) but all data is kept. |
-| Restore | `POST /manage/stores/{slug}/restore` | Re-enables an archived or failed store. |
-| Delete | `DELETE /manage/stores/{slug}` `{confirm: "<slug>"}` | **Irreversible** deprovision: drops every `{slug}_*` collection and removes the registry row. Requires the confirm token to equal the slug. |
-| Reconcile | `POST /manage/reconcile` `{drop_orphans?: bool}` | Finishes stuck `provisioning` rows, completes deletes stranded in `deleting`, and reports (optionally drops) orphaned `{slug}_*` collections that have no registry row. |
+| Rename | `PATCH /manage/stores/{handle}/{store}` `{name}` | Changes the display name on the registry and the store's `stores` singleton. The address is immutable (changing it would break bookmarks and canonical URLs). |
+| Archive | `POST /manage/stores/{handle}/{store}/archive` | Suspends the store: it stops routing (404s) but all data is kept. |
+| Restore | `POST /manage/stores/{handle}/{store}/restore` | Re-enables an archived or failed store. |
+| Delete | `DELETE /manage/stores/{handle}/{store}` `{confirm: "<store>"}` | **Irreversible** deprovision: drops every `{handle}__{store}_*` collection and removes the registry row; if it was the handle's last store, the handle's `namespace_members` are cleaned up too. Requires the confirm token to equal the store slug. |
+| Reconcile | `POST /manage/reconcile` `{drop_orphans?: bool}` | Finishes stuck `provisioning` rows, completes deletes stranded in `deleting`, and reports (optionally drops) orphaned `{handle}__{store}_*` collections that have no registry row. Superuser only. |
 
-Every lifecycle action is recorded to the platform `audit_log` (event, slug,
-acting admin, timestamp) — the trail for a deleted store survives, since it
-lives in the platform scope, not the dropped `{slug}_*` collections. The same
+Rename, archive, restore, and delete are gated to the **namespace owner** (or
+the superuser); reconcile is **superuser-only**. Every lifecycle and team action
+is recorded to the platform `audit_log` (event, handle, store, actor,
+timestamp) — the trail for a deleted store survives, since it lives in the
+platform scope, not the dropped `{handle}__{store}_*` collections. The same
 reconcile pass runs **best-effort on startup**, so a store left mid-provision or
 mid-delete by a crash self-heals on the next boot (guarded by
 `PROVISION_STUCK_MINUTES`, so in-flight work on a peer worker is never touched).
@@ -155,17 +189,20 @@ Everything is environment-driven; see [`.env.example`](.env.example). Key vars:
 
 | Variable | Purpose |
 | --- | --- |
-| `MDB_DB_NAME` | The one database that holds every store's `{slug}_*` collections |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | The single shared admin, seeded on first boot |
+| `MDB_DB_NAME` | The one database that holds every store's `{handle}__{store}_*` collections |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | The platform superuser, seeded on first boot (access to every namespace) |
 | `MDB_ENGINE_MASTER_KEY` | Encrypts app secrets at rest (base64 32-byte key) |
-| `MDB_JWT_SECRET` | Signs session JWTs (rotating it logs the admin out) |
-| `G_NOME_ENV` | Set to `production` behind TLS so the admin session cookie is `Secure` (see [`SCALE.md`](SCALE.md#session-cookies--csrf)) |
+| `MDB_JWT_SECRET` | Signs session JWTs **and** namespace invite tokens (rotating it logs users out + invalidates open invites) |
+| `INVITE_TTL_SECONDS` | Lifetime of a team invite token (default 7 days) |
+| `MAX_STORES_PER_HANDLE` | Optional per-handle store cap to blunt signup abuse (`0` = off) |
+| `G_NOME_ENV` | Set to `production` behind TLS so the session cookie is `Secure` (see [`SCALE.md`](SCALE.md#session-cookies--csrf)) |
 | `CLOUDINARY_*` | Image/video uploads (routes return 503 if unset) |
 | `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local AI editor (degrades to 503 if absent) |
 | `RESEND_API_KEY` / `RESEND_FROM` | Lead-notification email (unset → notifications off) |
 | `NOTIFY_ENABLED` | Global lead-notification kill switch (default `true`) |
 | `INQUIRY_RATELIMIT_PER_MIN` / `_PER_HOUR` | Public inquiry throttle, per IP+store (default 5 / 30) |
-| `AI_RATELIMIT_PER_MIN` / `UPLOAD_RATELIMIT_PER_MIN` | Per-admin AI + upload throttles (default 20 / 30) |
+| `SIGNUP_RATELIMIT_PER_MIN` / `_PER_HOUR` | Public signup throttle, per IP (default 5 / 20) |
+| `AI_RATELIMIT_PER_MIN` / `UPLOAD_RATELIMIT_PER_MIN` | Per-user AI + upload throttles (default 20 / 30) |
 | `STORE_CACHE_TTL_SECONDS` | Backstop interval for refreshing the `KNOWN_STORES` routing cache across workers (default 30) |
 | `PROVISION_STUCK_MINUTES` | How long a `provisioning` store may sit before the reconciler retries or fails it (default 10) |
 
@@ -176,8 +213,8 @@ production checklist, scaling model, and honest limits.
 
 ## Leads, notifications & abuse protection
 
-The public inquiry endpoint (`POST /{store}/api/submit-inquiry`) is the only
-unauthenticated write path, so it is hardened three ways:
+The public inquiry endpoint (`POST /{handle}/{store}/api/submit-inquiry`) is the
+only unauthenticated write path, so it is hardened three ways:
 
 - **Rate limiting.** A Mongo-backed sliding-window limiter (the engine's own,
   so no Redis/extra infra) throttles submissions **per IP + per store** — one
@@ -233,10 +270,10 @@ See [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 make init             Create .env with generated secrets
 make up               Build + run (foreground)
 make up-d             Build + run (detached)
-make provision-store  Create a store: SLUG=acme NAME="Acme Co"
-make archive-store    Suspend a store (keeps data): SLUG=acme
-make restore-store    Re-enable an archived/failed store: SLUG=acme
-make delete-store     Permanently deprovision a store: SLUG=acme
+make provision-store  Create a store: HANDLE=acme STORE=coffee NAME="Acme Coffee"
+make archive-store    Suspend a store (keeps data): HANDLE=acme STORE=coffee
+make restore-store    Re-enable an archived/failed store: HANDLE=acme STORE=coffee
+make delete-store     Permanently deprovision a store: HANDLE=acme STORE=coffee
 make reconcile        Finish stuck provisions/deletes, report orphans (DROP_ORPHANS=1 to drop)
 make secrets          Print freshly generated secrets
 make ai-pull          Pull the Ollama model for the AI editor
@@ -250,14 +287,15 @@ make logs / ps / down / clean
 ## Layout
 
 ```
-main.py               Multi-tenant runtime, provisioning, custom endpoints
+main.py               Multi-tenant runtime, namespace routing, provisioning, endpoints
+rbac.py               Per-namespace roles + effective-role mapping (namespace_members)
 ai_editor.py          Conversational store-editor (propose → validate → apply)
 notifications.py      Best-effort Resend email on new inquiries
 manifest.json         Domain: collections, auth, SSR routes, indexes (platform)
 store_template.json   Default content copied into every new store scope
-templates/            SSR templates (base_path-aware links)
+templates/            SSR templates (base_path-aware links) incl. signup, invite, team, landing
 static/               CSS/JS, PWA icons, service worker
-tests/                In-process pytest suite (isolation, auth, slug, lifecycle, security)
+tests/                In-process pytest suite (isolation, auth, slug, lifecycle, namespaces, rbac, signup, security)
 docker-compose.yml    App + MongoDB Atlas Local + Ollama
 ../.github/workflows/ CI: in-process suite + Docker build-and-boot smoke on push/PR
 ```
