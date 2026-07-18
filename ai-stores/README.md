@@ -31,7 +31,7 @@ multi-tenant, plus [`rbac.py`](rbac.py) for per-namespace roles.
 cd ai-stores
 make init        # create .env with generated secrets (edit ADMIN_* first)
 make up          # build + run at http://localhost:8000
-make ai-pull     # (optional) pull the local model for the AI editor
+# (optional) set GEMINI_API_KEY in .env to enable the AI editor
 ```
 
 On first boot with an empty database, a **`demo/shop`** store is provisioned
@@ -169,9 +169,9 @@ listing the key in `_ALT_TEMPLATE_FILES` / `STORE_TEMPLATES` in
 
 Editing storefront content is per store: catalog, layout, slideshow, specials,
 and inquiries all live under `/{handle}/{store}/admin/*`, and the conversational
-**AI editor** (local Ollama) edits only the active store. Team membership lives
-per handle at `/{handle}/{store}/admin/team` (owner-gated) — invites are signed
-JWTs accepted at `/manage/invite`.
+**AI editor** (Google Gemini, JSON response mode) edits only the active store.
+Team membership lives per handle at `/{handle}/{store}/admin/team` (owner-gated)
+— invites are signed JWTs accepted at `/manage/invite`.
 
 ---
 
@@ -225,7 +225,8 @@ Everything is environment-driven; see [`.env.example`](.env.example). Key vars:
 | `MAX_STORES_PER_HANDLE` | Optional per-handle store cap to blunt signup abuse (`0` = off) |
 | `G_NOME_ENV` | Set to `production` behind TLS so the session cookie is `Secure` (see [`SCALE.md`](SCALE.md#session-cookies--csrf)) |
 | `CLOUDINARY_*` | Image/video uploads (routes return 503 if unset) |
-| `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | Local AI editor (degrades to 503 if absent) |
+| `GEMINI_API_KEY` | Enables the AI editor (Gemini); unset → chat routes return 503 |
+| `GEMINI_MODEL` / `GEMINI_TEMPERATURE` | AI editor model (default `gemini-3.5-flash`) and sampling temperature |
 | `RESEND_API_KEY` / `RESEND_FROM` | Lead-notification email (unset → notifications off) |
 | `NOTIFY_ENABLED` | Global lead-notification kill switch (default `true`) |
 | `INQUIRY_RATELIMIT_PER_MIN` / `_PER_HOUR` | Public inquiry throttle, per IP+store (default 5 / 30) |
@@ -304,7 +305,6 @@ make restore-store    Re-enable an archived/failed store: HANDLE=acme STORE=coff
 make delete-store     Permanently deprovision a store: HANDLE=acme STORE=coffee
 make reconcile        Finish stuck provisions/deletes, report orphans (DROP_ORPHANS=1 to drop)
 make secrets          Print freshly generated secrets
-make ai-pull          Pull the Ollama model for the AI editor
 make test-deps        Install test deps (pytest, pytest-asyncio, asgi-lifespan)
 make test             Run the test suite (needs a local Mongo on :27017)
 make logs / ps / down / clean
@@ -317,7 +317,7 @@ make logs / ps / down / clean
 ```
 main.py               Multi-tenant runtime, namespace routing, provisioning, endpoints
 rbac.py               Per-namespace roles + effective-role mapping (namespace_members)
-ai_editor.py          Conversational store-editor (propose → validate → apply)
+ai_editor.py          Conversational store-editor: Gemini JSON mode → validate → apply
 notifications.py      Best-effort Resend email on new inquiries
 manifest.json         Domain: collections, auth, SSR routes, indexes (platform)
 store_template.json   Default (retail) starter content copied into a new store
@@ -325,7 +325,7 @@ store_template.*.json Per-business-type starter templates (e.g. restaurant)
 templates/            SSR templates (base_path-aware links) incl. signup, invite, team, landing
 static/               CSS/JS, PWA icons, service worker
 tests/                In-process pytest suite (isolation, auth, slug, lifecycle, namespaces, rbac, signup, security)
-docker-compose.yml    App + MongoDB Atlas Local + Ollama
+docker-compose.yml    App + MongoDB Atlas Local (AI editor calls the Gemini API)
 ../.github/workflows/ CI: in-process suite + Docker build-and-boot smoke on push/PR
 ```
 

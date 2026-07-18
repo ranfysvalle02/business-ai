@@ -1373,12 +1373,13 @@ async def upload_video(
     )
 
 
-# ── Conversational store editor (local Ollama) ──────────────────────────
+# ── Conversational store editor (Google Gemini, JSON response mode) ──────
 #
 # Two admin-only endpoints power the chat widget. They mirror the safety
-# ethos of the rest of the project: the model only *proposes* structured
-# ops, the backend validates them against the manifest, and nothing is
-# written until the admin confirms via /admin/ai/apply.
+# ethos of the rest of the project: Gemini only *proposes* structured ops
+# (constrained by a JSON responseSchema), the backend validates them against
+# the manifest, and nothing is written until the admin confirms via
+# /admin/ai/apply.
 
 
 async def _require_platform_admin(request: Request) -> dict[str, Any]:

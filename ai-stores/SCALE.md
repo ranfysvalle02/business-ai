@@ -247,22 +247,26 @@ Images and videos upload to **Cloudinary** and serve from its CDN with on-the-fl
 transforms (see the upload routes in [main.py](main.py)). Your container ships
 HTML, not megabytes — which is why one small replica can serve many rich stores.
 
-### The local AI runtime (optional, admin-only)
+### The AI runtime (optional, admin-only)
 
-The conversational editor's **Ollama** service is the heaviest component per
-compute but the easiest to reason about: it's admin-only and off the storefront
-hot path. Zero visitors touch it, so it scales with the number of admins editing
-at once (≈ a handful), not with traffic.
+The conversational editor calls **Google Gemini** in JSON/structured-output
+mode. It's the easiest component to reason about: admin-only, off the storefront
+hot path, and *stateless on our side* — inference is a managed API, so there's
+no model tier to size, no weights volume, and nothing to keep warm. Zero
+visitors touch it, so it scales with the number of admins editing at once
+(≈ a handful), not with traffic.
 
-- **Keep it as its own tier.** Don't co-locate the model with web replicas — give
-  it its own box (GPU for snappy larger models) and keep the app replicas tiny.
-- **One runtime for the whole platform.** Every store shares one
-  `OLLAMA_BASE_URL`, or you target a hosted OpenAI-compatible endpoint. The app
-  degrades gracefully (a clear 503) when the model is absent, so AI is switchable
-  per environment, not a hard dependency.
+- **No infrastructure to run.** The app makes an HTTPS call to
+  `generativelanguage.googleapis.com`; there is no sidecar container, GPU, or
+  model download. Web replicas stay tiny and identical.
+- **One key for the whole platform.** Every store shares one `GEMINI_API_KEY`
+  (and optional `GEMINI_MODEL`). The app degrades gracefully (a clear 503) when
+  the key is absent, so AI is switchable per environment, not a hard dependency.
+- **Cost/quotas, not capacity, are the knob.** Throughput is bounded by your
+  Gemini quota and the per-user `AI_RATELIMIT_PER_MIN`, not by a box you own.
 
-Its only state is the `ollama-models` volume (downloaded weights) — cache-like
-and reproducible with `make ai-pull`.
+It holds no state on our side — the only "config" is the key and model name,
+both reproducible from `.env`.
 
 ### The one stateful tier
 

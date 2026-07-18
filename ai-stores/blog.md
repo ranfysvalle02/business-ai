@@ -11,9 +11,9 @@ are really just queries, and the determinism machinery that lets a fresh clone
 reconcile to a known-good store every time.
 
 > **Update:** there's now a real LLM feature — an admin **conversational
-> editor** backed by a *local* Ollama model. It's built on the same ethos as
-> everything else here: the model only *proposes*, the manifest *validates*, and
-> the admin *confirms*. See
+> editor** backed by **Google Gemini** in JSON/structured-output mode. It's
+> built on the same ethos as everything else here: the model only *proposes*,
+> the manifest *validates*, and the admin *confirms*. See
 > ["The conversational editor"](#the-conversational-editor-propose-validate-confirm).
 
 > **Update:** AI Stores is now **multi-tenant with per-user namespaces**. One app
@@ -293,18 +293,21 @@ gallery after the catalog", "mark the Gift Card as sold", "change the tagline"
 — without learning where each control lives. The interesting part isn't that it
 uses an LLM; it's how little the LLM is *trusted*.
 
-The runtime is a local [Ollama](https://ollama.com) container (default
-`qwen2.5:7b-instruct`), so `docker compose up` stays fully self-contained: no
-external API keys, no data leaving the box. The whole feature is a new module,
-[`ai_editor.py`](ai_editor.py), plus two thin endpoints in `main.py` and a
-front-end widget.
+The runtime is [Google Gemini](https://ai.google.dev) driven in
+**JSON/structured-output mode**: we set `responseMimeType: "application/json"`
+plus a `responseSchema`, so the model is *constrained* to emit a single JSON
+object `{reply, ops:[{tool, args}]}` — no free-form prose, no function-calling
+round-trips. The whole feature is one module, [`ai_editor.py`](ai_editor.py),
+plus two thin endpoints in `main.py` and a front-end widget. Only
+`GEMINI_API_KEY` is required; absent it, the routes return a clean 503 and the
+storefront is unaffected.
 
 ```mermaid
 flowchart TD
   A["Admin: 'add a gallery after the catalog'"] --> C["POST /admin/ai/chat"]
   C --> S["build_snapshot(db): store + sections + items"]
-  S --> O["Ollama /api/chat with tool schemas"]
-  O --> P["Model emits tool calls (proposed ops)"]
+  S --> O["Gemini generateContent (JSON mode + responseSchema)"]
+  O --> P["Model emits constrained JSON: proposed ops"]
   P --> V["validate_ops(): manifest schema + enums + refs"]
   V -->|invalid / ambiguous| Q["Clarifying question — nothing written"]
   V -->|valid| D["Diff card: Apply / Discard"]
@@ -314,11 +317,13 @@ flowchart TD
 
 ### The model proposes; it never writes
 
-The chat endpoint sends the model a small, tightly-described **tool set** (one
-function per allowed change: `add_section`, `toggle_section`, `update_store_info`,
-`create_item`, `set_item_status`, `create_special`, …) and a compact **snapshot**
-of the current store for grounding. It parses the returned tool calls into raw
-ops — and then hands them to `validate_ops`, which is where all the trust lives:
+The chat endpoint describes a small, tightly-scoped **tool set** in the system
+prompt (one entry per allowed change: `add_section`, `toggle_section`,
+`update_store_info`, `create_item`, `set_item_status`, `create_special`, …),
+constrains the reply to the JSON `responseSchema`, and includes a compact
+**snapshot** of the current store for grounding. It parses the returned JSON
+into raw ops — and then hands them to `validate_ops`, which is where all the
+trust lives:
 
 - **Enums & schema** — a section `type` must be in the `section_types` registry;
   an item `status` must be one of the manifest enum; settings are checked
@@ -380,9 +385,9 @@ The determinism story extends to how it ships:
   `mongodb/mongodb-atlas-local` (a single-node replica set, reached with
   `?directConnection=true`). The app's `depends_on` uses
   `condition: service_healthy`, so it doesn't start until Mongo can answer
-  `ping` — no flaky boot races. A third service, `ollama`, provides the local LLM
-  for the chat editor; the app reaches it over the compose network and degrades
-  gracefully (a clear 503) if no model has been pulled yet.
+  `ping` — no flaky boot races. There's no LLM sidecar: the chat editor calls
+  the hosted **Gemini** API directly and degrades gracefully (a clear 503) when
+  `GEMINI_API_KEY` is unset.
 - **[`Makefile`](Makefile)** — one-command DX. `make init` writes a `.env` with a
   real base64 32-byte `MDB_ENGINE_MASTER_KEY` and a `MDB_JWT_SECRET`, so
   encryption is actually enabled on the very first boot instead of silently

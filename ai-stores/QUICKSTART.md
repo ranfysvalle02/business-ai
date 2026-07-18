@@ -24,7 +24,7 @@ everyone else signs up and owns only their own handle.
 ```bash
 cd ai-stores
 make init          # writes .env with freshly generated secrets
-make up            # build + start app + MongoDB + Ollama at :8000
+make up            # build + start app + MongoDB at :8000
 ```
 
 `make init` generates real `MDB_ENGINE_MASTER_KEY` and `MDB_JWT_SECRET` values.
@@ -135,7 +135,7 @@ Everything below is editable from the store's admin, or via the conversational
 
 | Feature | Enable by |
 | --- | --- |
-| **AI editor** (local Ollama) | `make ai-pull` after `make up` (pulls the model). Chat routes return 503 until then. |
+| **AI editor** (Google Gemini) | set `GEMINI_API_KEY` in `.env` (get one at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)). Optional: `GEMINI_MODEL` (default `gemini-3.5-flash`). Chat routes return 503 until set. |
 | **Image/video uploads** | set `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` (routes return 503 if unset). |
 | **Lead-notification email** | set `RESEND_API_KEY` + a verified `RESEND_FROM`. Per-store toggle lives in the dashboard. |
 
@@ -201,6 +201,15 @@ Compose injects it; you only set it yourself when running outside Compose.
 | `STORE_CACHE_TTL_SECONDS` | 30 | routing-cache backstop refresh interval |
 | `PROVISION_STUCK_MINUTES` | 10 | reconciler retry window for stuck provisions |
 
+**Optional features (off unless set)**
+
+| Var | Purpose |
+| --- | --- |
+| `GEMINI_API_KEY` | enables the AI editor (Gemini JSON mode); unset → chat routes 503 |
+| `GEMINI_MODEL` / `GEMINI_TEMPERATURE` | AI editor model (default `gemini-3.5-flash`) + sampling temperature |
+| `CLOUDINARY_*` | image/video uploads |
+| `RESEND_API_KEY` / `RESEND_FROM` | lead-notification email |
+
 Generate fresh secrets any time with `make secrets`.
 
 ---
@@ -212,8 +221,8 @@ Generate fresh secrets any time with `make secrets`.
 - **`/signup` or store create returns 422** → the handle/slug must be 3–40 chars,
   lowercase `a-z0-9-`, no underscore, and not a reserved word (`admin`, `api`,
   `manage`, `signup`, …).
-- **AI chat returns 503** → pull a model: `make ai-pull` (or set
-  `OLLAMA_BASE_URL` to an external host).
+- **AI chat returns 503** → set `GEMINI_API_KEY` in `.env` and restart. If it
+  says the model wasn't found, set `GEMINI_MODEL` to an available model.
 - **Uploads return 503** → Cloudinary isn't configured.
 - **A store won't route after create** → give the cross-worker cache a moment
   (`STORE_CACHE_TTL_SECONDS`), or run `make reconcile`.

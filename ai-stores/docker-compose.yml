@@ -77,11 +77,13 @@ services:
       - INVITE_TTL_SECONDS=${INVITE_TTL_SECONDS:-604800}
       - MAX_STORES_PER_HANDLE=${MAX_STORES_PER_HANDLE:-0}
 
-      # ── Local AI (Ollama) — powers the admin conversational editor ──
-      # Talks to the sibling `ollama` service. The chat routes degrade
-      # gracefully (503) until a model is pulled: `make ai-pull`.
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:7b-instruct}
+      # ── AI editor (Google Gemini) — powers the admin conversational editor ──
+      # Uses Gemini's JSON/structured-output mode. The chat routes degrade
+      # gracefully (503) until GEMINI_API_KEY is set; the storefront never
+      # depends on it. Get a key at https://aistudio.google.com/apikey.
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash}
+      - GEMINI_TEMPERATURE=${GEMINI_TEMPERATURE:-0.1}
     volumes:
       - ./static:/app/static:ro
       - ./templates:/app/templates:ro
@@ -90,9 +92,6 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
-      # AI is an optional feature; don't block the storefront on it.
-      ollama:
-        condition: service_started
     restart: unless-stopped
     healthcheck:
       test:
@@ -137,32 +136,10 @@ services:
     networks:
       - ai-stores
 
-  ollama:
-    # Local, self-hosted LLM runtime for the conversational store editor.
-    # No external API keys. Pull a model once after `up`: `make ai-pull`.
-    image: ollama/ollama:latest
-    container_name: ai-stores-ollama
-    ports:
-      - "${OLLAMA_PORT:-11434}:11434"
-    volumes:
-      - ollama-models:/root/.ollama
-    healthcheck:
-      # `ollama list` exits 0 once the server is answering.
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    restart: unless-stopped
-    networks:
-      - ai-stores
-
 volumes:
   mongo-data:
     driver: local
   mongo-config:
-    driver: local
-  ollama-models:
     driver: local
 
 networks:

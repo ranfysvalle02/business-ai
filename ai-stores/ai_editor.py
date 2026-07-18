@@ -1,11 +1,11 @@
 """
-AI Stores — conversational store editor (local Ollama).
+AI Stores — conversational store editor (Google Gemini, JSON response mode).
 
 This module is the brain behind the admin chat widget. It is deliberately
 *safe by construction*:
 
     * The LLM never writes to the database. It only proposes a list of
-      structured operations ("ops") by calling tools.
+      structured operations ("ops").
     * Every proposed op is validated here against the manifest (collection
       schemas, enums, the section-type registry) before the admin ever sees
       it, and re-validated again at apply time.
@@ -16,9 +16,15 @@ Scope (by product decision): layout/sections, store copy/info, catalog
 items, and specials. Theme/appearance is intentionally *out of scope* — the
 dedicated Appearance panel handles that — so the assistant redirects those.
 
-Runtime is a local Ollama container (no external API keys). Because smaller
-local models are weaker at tool-calling, the tool set is small and tightly
-described, and all trust lives in the validation + confirm steps.
+Runtime is Google's Gemini API (``generativelanguage.googleapis.com``) driven
+in **structured-output / JSON response mode**: we set
+``responseMimeType="application/json"`` plus a ``responseSchema`` so the model
+is *constrained* to emit a single JSON object ``{reply, ops:[{tool, args}]}``.
+Each op's ``args`` is itself a JSON-encoded string, which keeps the schema
+valid while letting per-tool arguments stay free-form. Structured output and
+function-calling can't be combined in one request, so we describe the tool
+contract in the system prompt and let the schema do the constraining. All
+trust still lives in the validation + confirm steps below.
 """
 from __future__ import annotations
 
@@ -35,10 +41,19 @@ from bson.errors import InvalidId
 
 logger = logging.getLogger("ai-stores.ai_editor")
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434").rstrip("/")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b-instruct")
-# Local inference can be slow on CPU; give it room but cap it.
-OLLAMA_TIMEOUT = float(os.getenv("OLLAMA_TIMEOUT", "120"))
+# ── Gemini configuration ──────────────────────────────────────────────────
+# GEMINI_API_KEY is the only required setting; the editor stays disabled (routes
+# return 503 with a clear message) until it is present. GEMINI_MODEL defaults to
+# the latest flash model — fast, cheap, and strong at structured output — and is
+# swappable to any generateContent-capable model (e.g. gemini-2.5-flash,
+# gemini-3.1-pro-preview) without code changes.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash").strip()
+GEMINI_API_BASE = os.getenv(
+    "GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta"
+).rstrip("/")
+GEMINI_TIMEOUT = float(os.getenv("GEMINI_TIMEOUT", "60"))
+GEMINI_TEMPERATURE = float(os.getenv("GEMINI_TEMPERATURE", "0.1"))
 
 ITEM_STATUS_ENUM = ["Available", "Limited Availability", "Pending", "Sold"]
 
@@ -78,7 +93,11 @@ def _section_settings_spec(manifest: dict, stype: str) -> dict[str, Any]:
     return (section_registry(manifest).get(stype, {}) or {}).get("settings", {}) or {}
 
 
-# ── Tool schemas (OpenAI-style function defs; accepted by Ollama) ──────────
+# ── Tool schemas ───────────────────────────────────────────────────────────
+# The single source of truth for the ops the assistant may propose. In JSON
+# response mode these are not sent as callable "tools"; instead they render the
+# tool contract in the system prompt (``_tools_contract``) and supply the
+# ``tool`` enum for the response schema (``response_schema``).
 
 def build_tools(manifest: dict) -> list[dict[str, Any]]:
     stypes = section_type_enum(manifest)
@@ -195,6 +214,31 @@ async def build_snapshot(db) -> dict[str, Any]:
     return {"store": store_copy, "sections": sections, "items": items, "specials": specials}
 
 
+def _tools_contract(manifest: dict) -> str:
+    """Render the tool set as a compact, prompt-friendly contract."""
+    lines: list[str] = []
+    for tool in build_tools(manifest):
+        fn = tool["function"]
+        params = fn.get("parameters", {}) or {}
+        required = set(params.get("required") or [])
+        arg_specs: list[str] = []
+        for pname, pspec in (params.get("properties") or {}).items():
+            frag = pname
+            flags = [pspec.get("type", "")]
+            if pname in required:
+                flags.append("required")
+            frag += f" ({', '.join(f for f in flags if f)})"
+            if pspec.get("enum"):
+                frag += f" one of {pspec['enum']}"
+            if pspec.get("description"):
+                frag += f" — {pspec['description']}"
+            arg_specs.append(frag)
+        lines.append(f"- {fn['name']}: {fn['description']}")
+        if arg_specs:
+            lines.append("    args: " + "; ".join(arg_specs))
+    return "\n".join(lines)
+
+
 def build_system_prompt(snapshot: dict, manifest: dict) -> str:
     stypes = ", ".join(section_type_enum(manifest))
     compact = {
@@ -205,72 +249,175 @@ def build_system_prompt(snapshot: dict, manifest: dict) -> str:
     }
     return (
         "You are the assistant inside an online store's admin panel. You help the "
-        "owner change their store by calling tools. Only make changes the user asks for.\n\n"
+        "owner change their store. Only make changes the user explicitly asks for.\n\n"
+        "Respond with a SINGLE JSON object of the form "
+        '{"reply": string, "ops": [{"tool": string, "args": string}]}. '
+        "Each op's `args` is a JSON object of that tool's arguments, encoded as a "
+        'JSON string — e.g. {"tool": "update_store_info", '
+        '"args": "{\\"tagline\\": \\"Fresh daily\\"}"}.\n\n'
         "Rules:\n"
         f"- Valid section types: {stypes}.\n"
-        "- Use the EXACT existing keys, item_codes, and titles from the store state below.\n"
-        "- Call one or more tools to make the requested change. Do not invent fields.\n"
+        "- Use the EXACT existing keys, item_codes, and titles from the store state below. "
+        "Do not invent fields or values.\n"
+        "- To make a change, add one or more ops and leave `reply` empty (the UI shows a "
+        "diff the owner confirms before anything is saved).\n"
         "- If the request is ambiguous or missing required info (e.g. which item, what price), "
-        "do NOT call a tool — reply with a short clarifying question instead.\n"
-        "- You cannot change colors, fonts, or the visual theme. If asked, reply telling the user "
-        "to use the Appearance panel on the dashboard.\n\n"
+        "return `ops: []` and put a short clarifying question in `reply`.\n"
+        "- You cannot change colors, fonts, or the visual theme. If asked, return `ops: []` and "
+        "tell the user to use the Appearance panel on the dashboard.\n\n"
+        "Available tools:\n" + _tools_contract(manifest) + "\n\n"
         "Current store state (JSON):\n" + json.dumps(compact, ensure_ascii=False)
     )
 
 
-# ── Ollama call ───────────────────────────────────────────────────────────
+# ── Gemini call (JSON response mode) ───────────────────────────────────────
 
 def _parse_args(raw: Any) -> dict:
     if isinstance(raw, dict):
         return raw
     if isinstance(raw, str):
         try:
-            return json.loads(raw)
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
         except (ValueError, TypeError):
             return {}
     return {}
 
 
-async def propose(messages: list[dict], snapshot: dict, manifest: dict) -> dict[str, Any]:
-    """Ask the model for tool calls. Returns {'reply': str} or {'ops': [...]}. """
-    payload = {
-        "model": OLLAMA_MODEL,
-        "messages": [{"role": "system", "content": build_system_prompt(snapshot, manifest)}, *messages],
-        "tools": build_tools(manifest),
-        "stream": False,
-        "options": {"temperature": 0.1},
+def response_schema(manifest: dict) -> dict[str, Any]:
+    """The Gemini ``responseSchema`` that constrains the model to our contract.
+
+    ``tool`` is limited to the known tool names; ``args`` is a JSON-encoded
+    string so per-tool arguments stay free-form while the schema stays valid.
+    """
+    tool_names = [t["function"]["name"] for t in build_tools(manifest)]
+    return {
+        "type": "OBJECT",
+        "properties": {
+            "reply": {
+                "type": "STRING",
+                "description": "A short message to the owner: a clarifying question when the request is ambiguous or out of scope, otherwise an empty string.",
+            },
+            "ops": {
+                "type": "ARRAY",
+                "description": "Ordered changes to propose. Empty when you are asking for clarification.",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "tool": {"type": "STRING", "enum": tool_names},
+                        "args": {
+                            "type": "STRING",
+                            "description": "The chosen tool's arguments as a JSON object, encoded as a JSON string.",
+                        },
+                    },
+                    "required": ["tool", "args"],
+                },
+            },
+        },
+        "required": ["reply", "ops"],
+        "propertyOrdering": ["reply", "ops"],
     }
+
+
+def _to_gemini_contents(messages: list[dict]) -> list[dict[str, Any]]:
+    """Map chat turns to Gemini ``contents`` (assistant → ``model`` role)."""
+    contents: list[dict[str, Any]] = []
+    for m in messages:
+        text = str(m.get("content") or "").strip()
+        if not text:
+            continue
+        role = "model" if m.get("role") == "assistant" else "user"
+        contents.append({"role": role, "parts": [{"text": text}]})
+    return contents
+
+
+def build_payload(messages: list[dict], snapshot: dict, manifest: dict) -> dict[str, Any]:
+    """Assemble the ``generateContent`` request body (JSON response mode)."""
+    return {
+        "systemInstruction": {"parts": [{"text": build_system_prompt(snapshot, manifest)}]},
+        "contents": _to_gemini_contents(messages),
+        "generationConfig": {
+            "temperature": GEMINI_TEMPERATURE,
+            "responseMimeType": "application/json",
+            "responseSchema": response_schema(manifest),
+        },
+    }
+
+
+def _gemini_error_message(resp: "httpx.Response") -> str:
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
-            resp = await client.post(f"{OLLAMA_BASE_URL}/api/chat", json=payload)
+        return str((resp.json().get("error") or {}).get("message") or "").strip()
+    except Exception:  # noqa: BLE001
+        return resp.text[:200]
+
+
+def parse_gemini_response(data: dict) -> dict[str, Any]:
+    """Turn a ``generateContent`` response into ``{'ops': [...]}`` or ``{'reply': str}``."""
+    if (data.get("promptFeedback") or {}).get("blockReason"):
+        return {"reply": "I can't help with that request. Try describing the store change differently."}
+
+    candidates = data.get("candidates") or []
+    if not candidates:
+        return {"reply": "I'm not sure how to help with that yet."}
+
+    cand = candidates[0]
+    parts = ((cand.get("content") or {}).get("parts")) or []
+    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+    if not text:
+        if cand.get("finishReason") == "MAX_TOKENS":
+            return {"reply": "That was a bit much to handle in one step — try a smaller, more specific change."}
+        return {"reply": "I'm not sure how to help with that yet."}
+
+    try:
+        obj = json.loads(text)
+    except (ValueError, TypeError):
+        # JSON mode should guarantee valid JSON; fall back to the raw text.
+        return {"reply": text[:500]}
+    if not isinstance(obj, dict):
+        return {"reply": "I'm not sure how to help with that yet."}
+
+    ops: list[dict[str, Any]] = []
+    for item in obj.get("ops") or []:
+        if isinstance(item, dict) and item.get("tool"):
+            ops.append({"tool": item["tool"], "args": _parse_args(item.get("args"))})
+    if ops:
+        return {"ops": ops}
+
+    reply = str(obj.get("reply") or "").strip()
+    return {"reply": reply or "I couldn't turn that into a change. Could you rephrase?"}
+
+
+async def propose(messages: list[dict], snapshot: dict, manifest: dict) -> dict[str, Any]:
+    """Ask Gemini for structured ops. Returns ``{'reply': str}`` or ``{'ops': [...]}``."""
+    if not GEMINI_API_KEY:
+        raise AIEditorError(
+            "The AI editor isn't configured. Set GEMINI_API_KEY to enable it."
+        )
+
+    url = f"{GEMINI_API_BASE}/models/{GEMINI_MODEL}:generateContent"
+    payload = build_payload(messages, snapshot, manifest)
+    try:
+        async with httpx.AsyncClient(timeout=GEMINI_TIMEOUT) as client:
+            resp = await client.post(
+                url,
+                headers={"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
+                json=payload,
+            )
     except httpx.HTTPError as exc:
-        raise AIEditorError(f"Cannot reach the local AI service at {OLLAMA_BASE_URL}. Is the ollama container running?") from exc
+        raise AIEditorError("Couldn't reach the Gemini API. Check your network connection.") from exc
 
+    if resp.status_code in (401, 403):
+        raise AIEditorError("Gemini rejected the API key. Check GEMINI_API_KEY.")
     if resp.status_code == 404:
-        raise AIEditorError(f"Model '{OLLAMA_MODEL}' is not available. Pull it with: make ai-pull")
+        raise AIEditorError(
+            f"Gemini model '{GEMINI_MODEL}' was not found. Set GEMINI_MODEL to an available model."
+        )
+    if resp.status_code == 429:
+        raise AIEditorError("Gemini is rate-limiting requests. Wait a moment and try again.")
     if resp.status_code >= 400:
-        detail = ""
-        try:
-            detail = resp.json().get("error", "")
-        except Exception:  # noqa: BLE001
-            detail = resp.text[:200]
-        raise AIEditorError(f"AI service error: {detail or resp.status_code}")
+        raise AIEditorError(f"Gemini error: {_gemini_error_message(resp) or resp.status_code}")
 
-    data = resp.json()
-    msg = data.get("message", {}) or {}
-    tool_calls = msg.get("tool_calls") or []
-    if not tool_calls:
-        return {"reply": (msg.get("content") or "").strip() or "I'm not sure how to help with that yet."}
-
-    ops = []
-    for tc in tool_calls:
-        fnc = tc.get("function", {}) or {}
-        name = fnc.get("name")
-        if name:
-            ops.append({"tool": name, "args": _parse_args(fnc.get("arguments"))})
-    if not ops:
-        return {"reply": (msg.get("content") or "").strip() or "I couldn't turn that into a change."}
-    return {"ops": ops}
+    return parse_gemini_response(resp.json())
 
 
 # ── Validation + normalization ────────────────────────────────────────────

@@ -12,12 +12,10 @@
 # Prefer `docker compose` (v2); fall back to legacy `docker-compose`.
 COMPOSE ?= docker compose
 PY      ?= python3
-# Model for the conversational editor. Override: make ai-pull OLLAMA_MODEL=...
-OLLAMA_MODEL ?= qwen2.5:7b-instruct
 
 .DEFAULT_GOAL := help
 
-.PHONY: help init secrets up up-d down restart logs ps clean build ai-pull provision-store reconcile archive-store restore-store delete-store test test-deps
+.PHONY: help init secrets up up-d down restart logs ps clean build provision-store reconcile archive-store restore-store delete-store test test-deps
 
 # Log in as the .env admin into a temp cookie jar ($$JAR), setting $$BASE.
 # Used by the store-management targets below; keeps each recipe a one-liner.
@@ -77,9 +75,6 @@ ps: ## Show container status
 
 clean: ## Stop and remove containers AND the mongo data volume
 	$(COMPOSE) down -v
-
-ai-pull: ## Pull the Ollama model for the chat editor (run once after `up`)
-	$(COMPOSE) exec ollama ollama pull $(OLLAMA_MODEL)
 
 test-deps: ## Install the test/dev dependencies (pytest, pytest-asyncio, asgi-lifespan)
 	$(PY) -m pip install -r requirements-dev.txt
