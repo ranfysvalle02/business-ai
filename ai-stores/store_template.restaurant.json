@@ -1,0 +1,197 @@
+{
+  "_comment": "Restaurant starter template. Selected when a store is created with business_type=\"restaurant\" (see _load_store_template / provision_store in main.py). Mirrors store_template.json's shape; `name` and `slug_id` on the single store document are overwritten per store at provision time. Everything else is editable starter content from the admin dashboard.",
+
+  "stores": [
+    {
+      "name": "New Restaurant",
+      "slug_id": "new-restaurant",
+      "business_type": "restaurant",
+      "tagline": "Fresh plates, warm room, good people",
+      "about_text": "A neighborhood kitchen serving seasonal dishes made from scratch. This is placeholder copy: edit it from the admin dashboard to tell your story — your chef, your sourcing, your room. Reorder sections, build your menu, and post today's specials without touching code.",
+      "address": "123 Main Street, Your City",
+      "phone": "15551234567",
+      "phone_display": "(555) 123-4567",
+      "email": "hello@example.com",
+      "notify_enabled": true,
+      "notify_email": "",
+      "hours": "Tuesday-Thursday: 5pm-10pm\nFriday-Saturday: 5pm-11pm\nSunday: 10am-3pm (Brunch)\nMonday: Closed",
+      "lang": "en",
+      "hero_image_url": "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=1600&auto=format&fit=crop",
+      "logo_url": "/static/img/logo.png",
+      "google_maps_embed_html": "",
+      "inventory_description": "Browse the menu. Every dish is managed from the admin console — add your own plates, set prices, and group them into courses.",
+      "cta_label": "Reserve",
+      "cta_href": "/contact",
+      "schema_type": "Restaurant",
+      "currency": "USD",
+      "price_range": "$$",
+      "seo_keywords": "restaurant, menu, dinner, brunch, reservations, local food",
+      "google_tag_id": null,
+      "meta_pixel_id": null,
+      "socials": [
+        { "icon": "instagram", "url": "https://instagram.com/" },
+        { "icon": "facebook",  "url": "https://facebook.com/"  }
+      ],
+      "theme_primary":        "#e0653a",
+      "theme_secondary":      "#f4b942",
+      "theme_background":     "#181210",
+      "theme_surface":        "#241b17",
+      "theme_text":           "#f8f1ea",
+      "theme_text_secondary": "#c8b6a6",
+      "theme_on_primary":     "#ffffff",
+      "theme_on_secondary":   "#1a1108",
+      "style_preset":         "warm",
+      "font_heading":         "'Playfair Display', Georgia, serif",
+      "font_body":            "'Inter', system-ui, sans-serif",
+      "fonts_google":         "Playfair+Display:wght@600;700;800&family=Inter:wght@400;500;600;700",
+      "theme_radius":         "0.5rem",
+      "heading_transform":    "none",
+      "heading_spacing":      "-0.01em"
+    }
+  ],
+
+  "sections": [
+    {
+      "key": "hero",
+      "type": "hero",
+      "title": "Hero slideshow",
+      "order": 1,
+      "visible": true,
+      "nav_label": null,
+      "anchor": "hero",
+      "settings": { "show_cta": true }
+    },
+    {
+      "key": "catalog",
+      "type": "catalog",
+      "title": "Menu grid",
+      "order": 2,
+      "visible": true,
+      "nav_label": "Menu",
+      "anchor": "menu",
+      "settings": { "heading": "Our Menu", "subheading": "Seasonal, made from scratch", "columns": 3 }
+    },
+    {
+      "key": "specials",
+      "type": "specials",
+      "title": "Today's specials",
+      "order": 3,
+      "visible": true,
+      "nav_label": "Specials",
+      "anchor": "specials",
+      "settings": { "heading": "Today's Specials" }
+    },
+    {
+      "key": "cta",
+      "type": "cta",
+      "title": "Reservation banner",
+      "order": 4,
+      "visible": true,
+      "nav_label": null,
+      "anchor": "cta",
+      "settings": {
+        "heading": "Join us for dinner",
+        "subtext": "Book a table or ask about private events — we would love to host you.",
+        "button_label": "Reserve a table",
+        "button_href": "/contact",
+        "bg_image": ""
+      }
+    },
+    {
+      "key": "contact",
+      "type": "contact",
+      "title": "Find us & hours",
+      "order": 5,
+      "visible": true,
+      "nav_label": "Visit",
+      "anchor": "contact",
+      "settings": { "heading": "Find Us", "show_form": true, "show_map": true }
+    }
+  ],
+
+  "items": [
+    {
+      "name": "Wood-Fired Focaccia",
+      "item_code": "STR001",
+      "category": "Starters",
+      "price": 9.0,
+      "description": "Rosemary and sea salt, cultured butter. A sample dish — replace it with your own from the admin console.",
+      "image_url": "https://images.unsplash.com/photo-1585478259715-4d3a5f4e0a0a?w=800&auto=format&fit=crop",
+      "status": "Available",
+      "attributes": { "Vegetarian": "Yes" }
+    },
+    {
+      "name": "Little Gem Caesar",
+      "item_code": "STR002",
+      "category": "Starters",
+      "price": 13.0,
+      "description": "Crisp lettuce, anchovy dressing, sourdough crumb, aged parmesan.",
+      "image_url": "https://images.unsplash.com/photo-1550304943-4f24f54ddde9?w=800&auto=format&fit=crop",
+      "status": "Available",
+      "attributes": { "Add chicken": "+6" }
+    },
+    {
+      "name": "Handmade Tagliatelle",
+      "item_code": "MAIN001",
+      "category": "Mains",
+      "price": 24.0,
+      "description": "Slow-braised ragù, parmesan, cracked pepper. Group dishes into courses with categories — the menu section lists them automatically.",
+      "image_url": "https://images.unsplash.com/photo-1621996346565-e3dbc646d9a9?w=800&auto=format&fit=crop",
+      "status": "Available",
+      "attributes": { "Portion": "Regular" }
+    },
+    {
+      "name": "Grilled Market Fish",
+      "item_code": "MAIN002",
+      "category": "Mains",
+      "price": 29.0,
+      "description": "Whatever's freshest, charred greens, salsa verde. Mark items Available, Limited, Pending, or Sold — the badge updates on the storefront.",
+      "image_url": "https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?w=800&auto=format&fit=crop",
+      "status": "Limited Availability",
+      "attributes": { "Catch": "Daily" }
+    },
+    {
+      "name": "Dry-Aged Burger",
+      "item_code": "MAIN003",
+      "category": "Mains",
+      "price": 19.0,
+      "description": "Aged beef, house pickles, comté, brioche, fries.",
+      "image_url": "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&auto=format&fit=crop",
+      "status": "Available",
+      "attributes": { "Cook": "Medium recommended" }
+    },
+    {
+      "name": "Olive Oil Cake",
+      "item_code": "DES001",
+      "category": "Desserts",
+      "price": 11.0,
+      "description": "Citrus, crème fraîche, candied zest. Duplicate, edit, or delete any of these samples to build your real menu.",
+      "image_url": "https://images.unsplash.com/photo-1464349095431-e9a21285b5f3?w=800&auto=format&fit=crop",
+      "status": "Available",
+      "attributes": { "Vegetarian": "Yes" }
+    },
+    {
+      "name": "House Negroni",
+      "item_code": "DRK001",
+      "category": "Drinks",
+      "price": 14.0,
+      "description": "Barrel-rested, orange oil. A drinks-menu example — perfect for a bar list or wine-by-the-glass.",
+      "image_url": "https://images.unsplash.com/photo-1551024709-8f23befc6f87?w=800&auto=format&fit=crop",
+      "status": "Available",
+      "attributes": { "ABV": "Contains alcohol" }
+    }
+  ],
+
+  "specials": [
+    {
+      "title": "Sunday Brunch",
+      "content": "Placeholder promotion — edit or remove this from the admin Specials page. Announce brunch, a prix fixe, a wine dinner, or holiday hours here."
+    }
+  ],
+
+  "slideshow": [
+    { "image_url": "https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?w=1920&auto=format&fit=crop", "caption": "Welcome to the table", "order": 1, "transition": "kenburns", "duration_ms": 7000, "focal_x": 0.5, "focal_y": 0.55 },
+    { "image_url": "https://images.unsplash.com/photo-1466978913421-dad2ebd01d17?w=1920&auto=format&fit=crop", "caption": "Made from scratch, daily",  "order": 2, "transition": "zoom",     "duration_ms": 6500, "focal_x": 0.5, "focal_y": 0.5  },
+    { "image_url": "https://images.unsplash.com/photo-1414235077428-338989a2e8c0?w=1920&auto=format&fit=crop", "caption": "Gather with us",           "order": 3, "transition": "slide",    "duration_ms": 7000, "focal_x": 0.5, "focal_y": 0.5  }
+  ]
+}

@@ -205,12 +205,14 @@ No change to the loop, the route, or the admin plumbing.
 
 ## Determinism: idempotent, additive seeding
 
-Storefront content no longer lives in `manifest.json` — it lives in
-[`store_template.json`](store_template.json), the bundle copied into **each new
-store scope** when it's provisioned. Provisioning (`provision_store` in
-`main.py`) is idempotent and **purely additive**: it inserts what's missing by a
-stable key and never overwrites an admin's edits, so re-running it (or a retry
-after a partial failure) is always safe.
+Storefront content no longer lives in `manifest.json` — it lives in a
+**starter template** copied into **each new store scope** when it's provisioned.
+The default is [`store_template.json`](store_template.json) (retail); a store's
+`business_type` can select an alternate vertical bundle (e.g.
+[`store_template.restaurant.json`](store_template.restaurant.json)). Provisioning
+(`provision_store` in `main.py`) is idempotent and **purely additive**: it
+inserts what's missing by a stable key and never overwrites an admin's edits, so
+re-running it (or a retry after a partial failure) is always safe.
 
 Two strategies do the seeding:
 

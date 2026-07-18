@@ -114,30 +114,45 @@ Pieces in [`main.py`](main.py) + [`rbac.py`](rbac.py):
 ## Creating a store
 
 **Self-serve (new users):** open `/signup`, pick a globally unique **handle**,
-an email/password, and a first store slug. This creates a non-admin `member`
-user, provisions `{handle}__{store}`, and makes you the `owner` of the handle.
+an email/password, a first store slug, and a **store type**. This creates a
+non-admin `member` user, provisions `{handle}__{store}` from the matching starter
+template, and makes you the `owner` of the handle.
 
 **From the UI (existing owner/superuser):** sign in at `/manage`, pick a handle
-you own, enter a name, submit. The store slug is suggested from the name and
-validated (`^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$`); handles are validated the same
-way and are globally unique.
+you own, enter a name, choose a type, submit. The store slug is suggested from the
+name and validated (`^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$`); handles are validated
+the same way and are globally unique.
 
 **From the API** (owner of the handle, or superuser):
 
 ```bash
 curl -b cookies.txt -H 'Content-Type: application/json' \
-  -d '{"handle":"acme","slug":"coffee","name":"Acme Coffee"}' \
+  -d '{"handle":"acme","slug":"coffee","name":"Acme Coffee","business_type":"restaurant"}' \
   http://localhost:8000/manage/stores
 ```
 
 Provisioning (`provision_store`) is idempotent and step-logged: validate handle
 + slug → **register the store in `store_registry` with `status: "provisioning"`**
-→ `get_scoped_db("{handle}__{store}")` → create indexes → seed
-[`store_template.json`](store_template.json) additively → **flip `status` to
-`"ready"`**. Writing the registry row *first* means a mid-way failure never
-leaves orphan `{handle}__{store}_*` collections unaccounted for — the row stays
-`provisioning` and a re-run (or the reconciler) finishes it safely. Re-running
-never clobbers admin edits.
+→ `get_scoped_db("{handle}__{store}")` → create indexes → seed the selected
+starter template additively → **flip `status` to `"ready"`**. Writing the registry
+row *first* means a mid-way failure never leaves orphan `{handle}__{store}_*`
+collections unaccounted for — the row stays `provisioning` and a re-run (or the
+reconciler) finishes it safely. Re-running never clobbers admin edits.
+
+### Starter templates
+
+`business_type` selects the starter content copied into a new store. The
+`template` used is stored on the registry row so a reconcile-driven retry
+re-seeds from the same one; a blank or unknown type falls back to the default.
+
+| `business_type` | Template file |
+| --- | --- |
+| `retail` (default) | [`store_template.json`](store_template.json) |
+| `restaurant` | [`store_template.restaurant.json`](store_template.restaurant.json) |
+
+Add a vertical by dropping a `store_template.<key>.json` next to these and
+listing the key in `_ALT_TEMPLATE_FILES` / `STORE_TEMPLATES` in
+[`main.py`](main.py) — the create-store and signup pickers update automatically.
 
 Editing storefront content is per store: catalog, layout, slideshow, specials,
 and inquiries all live under `/{handle}/{store}/admin/*`, and the conversational
@@ -292,7 +307,8 @@ rbac.py               Per-namespace roles + effective-role mapping (namespace_me
 ai_editor.py          Conversational store-editor (propose → validate → apply)
 notifications.py      Best-effort Resend email on new inquiries
 manifest.json         Domain: collections, auth, SSR routes, indexes (platform)
-store_template.json   Default content copied into every new store scope
+store_template.json   Default (retail) starter content copied into a new store
+store_template.*.json Per-business-type starter templates (e.g. restaurant)
 templates/            SSR templates (base_path-aware links) incl. signup, invite, team, landing
 static/               CSS/JS, PWA icons, service worker
 tests/                In-process pytest suite (isolation, auth, slug, lifecycle, namespaces, rbac, signup, security)

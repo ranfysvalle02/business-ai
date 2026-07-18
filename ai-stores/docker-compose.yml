@@ -1,7 +1,8 @@
 # AI Stores — mdb-engine + MongoDB Atlas Local
 #
-# One instance serves many stores at /{store}; the shared admin adds stores at
-# runtime from /manage (no redeploy). A `demo` store is seeded on first boot.
+# One instance serves many stores at /{handle}/{store}; users self-serve at
+# /signup and the platform superuser adds stores from /manage (no redeploy).
+# A demo/shop store is seeded on first boot.
 #
 # Quick start:
 #   1. cp .env.example .env   (then edit secrets / admin creds)
@@ -29,7 +30,7 @@ services:
       - path: .env
         required: false
     environment:
-      # ── Database (one Mongo DB holds every store; scopes are {slug}_* collections) ──
+      # ── Database (one Mongo DB holds every store; scopes are {handle}__{store}_* collections) ──
       - MONGODB_URI=mongodb://mongo:27017/?directConnection=true
       - MDB_DB_NAME=${MDB_DB_NAME:-ai_stores}
 
@@ -62,11 +63,19 @@ services:
       - RESEND_FROM=${RESEND_FROM:-}
       - NOTIFY_ENABLED=${NOTIFY_ENABLED:-true}
 
-      # ── Abuse protection (per-IP+store inquiries; per-admin AI/uploads) ──
+      # ── Abuse protection (per-IP inquiries + signup; per-user AI/uploads) ──
       - INQUIRY_RATELIMIT_PER_MIN=${INQUIRY_RATELIMIT_PER_MIN:-5}
       - INQUIRY_RATELIMIT_PER_HOUR=${INQUIRY_RATELIMIT_PER_HOUR:-30}
+      - SIGNUP_RATELIMIT_PER_MIN=${SIGNUP_RATELIMIT_PER_MIN:-5}
+      - SIGNUP_RATELIMIT_PER_HOUR=${SIGNUP_RATELIMIT_PER_HOUR:-20}
       - AI_RATELIMIT_PER_MIN=${AI_RATELIMIT_PER_MIN:-20}
       - UPLOAD_RATELIMIT_PER_MIN=${UPLOAD_RATELIMIT_PER_MIN:-30}
+
+      # ── Namespaces & self-serve signup ──
+      # INVITE_TTL_SECONDS: team-invite link lifetime (default 7 days).
+      # MAX_STORES_PER_HANDLE: cap stores per owned handle (0 = unlimited).
+      - INVITE_TTL_SECONDS=${INVITE_TTL_SECONDS:-604800}
+      - MAX_STORES_PER_HANDLE=${MAX_STORES_PER_HANDLE:-0}
 
       # ── Local AI (Ollama) — powers the admin conversational editor ──
       # Talks to the sibling `ollama` service. The chat routes degrade

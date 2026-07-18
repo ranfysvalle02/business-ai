@@ -127,8 +127,12 @@ step-logged, so a partial failure is safe to retry:
    `run_index_creation_for_collection` against `{handle}__{store}_*` collections.
    No private engine internals, so it stays stable across engine upgrades. The
    per-doc `app_id` index auto-ensures on first access.
-5. Seed `store_template.json` additively (by stable key), overriding
-   `name`/`slug_id`. Re-running never clobbers admin edits.
+5. Seed the starter template for the store's `business_type` additively (by
+   stable key), overriding `name`/`slug_id`. The default (retail) is
+   `store_template.json`; alternates live in `store_template.<key>.json` (e.g.
+   `restaurant`) and the chosen `template` is stored on the registry row so a
+   reconcile-driven retry re-seeds from the same one. Re-running never clobbers
+   admin edits.
 6. **Flip `status` to `"ready"`** and warm the in-memory `KNOWN_HANDLES` +
    `KNOWN_STORES` sets.
 
@@ -288,7 +292,7 @@ You can only protect what you can name. The durable state is *exactly*:
    Cloudinary creds. These are platform-wide, not per store.
 3. **Media** in Cloudinary (a separate durability domain with its own backups).
 
-Everything else — image, templates, manifest, `store_template.json` — is
+Everything else — image, templates, manifest, `store_template*.json` — is
 reproducible from this repo.
 
 Consequences:

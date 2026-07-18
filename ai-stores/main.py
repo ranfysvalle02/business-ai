@@ -102,8 +102,36 @@ else:
 _manifest_data = json.loads(MANIFEST_PATH.read_text())
 
 STORE_TEMPLATE_PATH = BASE_DIR / "store_template.json"
-# Default content copied into each new store scope (name/slug overridden per store).
+# Default starter content copied into each new store scope (name/slug overridden
+# per store). Used for "retail" and as the fallback for any unknown/blank type.
 _STORE_TEMPLATE: dict[str, list[dict[str, Any]]] = json.loads(STORE_TEMPLATE_PATH.read_text())
+
+# Alternate starter templates by business type. Each file mirrors the shape of
+# ``store_template.json`` (stores/sections/items/specials/slideshow) with content
+# tuned for that vertical. Add a vertical by dropping a ``store_template.<key>.json``
+# here and listing the key in ``STORE_TEMPLATES`` (which drives the create/signup UIs).
+_ALT_TEMPLATE_FILES: dict[str, Path] = {
+    "restaurant": BASE_DIR / "store_template.restaurant.json",
+}
+# Business types offered in the create-store + signup UIs. "retail" is the default
+# template above; the rest map to ``_ALT_TEMPLATE_FILES``.
+STORE_TEMPLATES: tuple[str, ...] = ("retail", *sorted(_ALT_TEMPLATE_FILES))
+
+
+def _load_store_template(business_type: str | None) -> dict[str, list[dict[str, Any]]]:
+    """Return a fresh copy of the starter template for ``business_type``.
+
+    Falls back to the default (retail) template for a blank/unknown type or an
+    unreadable file, so provisioning is never blocked by a bad template key.
+    """
+    key = (business_type or "").strip().lower()
+    path = _ALT_TEMPLATE_FILES.get(key)
+    if path is not None:
+        try:
+            return json.loads(path.read_text())
+        except Exception as exc:  # noqa: BLE001 — fall back to the default template
+            logger.warning(f"store template '{key}' unreadable, using default: {exc}")
+    return copy.deepcopy(_STORE_TEMPLATE)
 
 # ── Multi-tenant runtime configuration ─────────────────────────────────
 #
@@ -591,23 +619,32 @@ def _validate_slug(slug: str) -> str:
 
 
 async def provision_store(
-    engine, handle: str, store: str, name: str = "", owner_email: str | None = None
+    engine,
+    handle: str,
+    store: str,
+    name: str = "",
+    owner_email: str | None = None,
+    template: str = "",
 ) -> dict[str, str]:
     """Create a store scope end to end: register → indexes → seed → mark ready.
 
     A store lives under a namespace ``handle`` at ``/{handle}/{store}`` and maps
-    to the engine scope ``{handle}__{store}``. Idempotent and step-logged: the
-    registry row is written **first** with ``status="provisioning"`` so the
-    store is observable before its collections exist. If seeding fails mid-way
-    the row stays ``provisioning`` — never leaving orphan ``{scope}_*``
-    collections unaccounted for — and the reconciler (or a plain re-run) can
-    finish it safely, since seeding is additive by key and index creation is
-    idempotent.
+    to the engine scope ``{handle}__{store}``. ``template`` selects the starter
+    content by business type (``retail`` default, or a key in
+    ``_ALT_TEMPLATE_FILES`` such as ``restaurant``); it is persisted on the
+    registry row so a reconcile-driven retry re-seeds from the same template.
+    Idempotent and step-logged: the registry row is written **first** with
+    ``status="provisioning"`` so the store is observable before its collections
+    exist. If seeding fails mid-way the row stays ``provisioning`` — never
+    leaving orphan ``{scope}_*`` collections unaccounted for — and the reconciler
+    (or a plain re-run) can finish it safely, since seeding is additive by key
+    and index creation is idempotent.
     """
     handle = _validate_slug(handle)
     store = _validate_slug(store)
     scope = scope_id(handle, store)
     name = (name or "").strip() or store
+    template_key = (template or "").strip().lower()
     now = datetime.now(timezone.utc)
 
     reg = await _platform_db(engine)
@@ -615,6 +652,7 @@ async def provision_store(
         "name": name,
         "status": STORE_STATUS_PROVISIONING,
         "scope": scope,
+        "template": template_key,
         "updated_at": now,
     }
     if owner_email:
@@ -628,15 +666,15 @@ async def provision_store(
     db = await engine.get_scoped_db(scope)
     await _ensure_store_indexes(engine, scope)
 
-    template = copy.deepcopy(_STORE_TEMPLATE)
-    stores = template.get("stores") or [{}]
+    content = _load_store_template(template_key)
+    stores = content.get("stores") or [{}]
     stores[0]["name"] = name
     stores[0]["slug_id"] = store
     await _seed_singleton(db, "stores", stores)
-    await _seed_by_key(db, "sections", "key", template.get("sections", []))
-    await _seed_by_key(db, "items", "item_code", template.get("items", []))
-    await _seed_singleton(db, "specials", template.get("specials", []))
-    await _seed_singleton(db, "slideshow", template.get("slideshow", []))
+    await _seed_by_key(db, "sections", "key", content.get("sections", []))
+    await _seed_by_key(db, "items", "item_code", content.get("items", []))
+    await _seed_singleton(db, "specials", content.get("specials", []))
+    await _seed_singleton(db, "slideshow", content.get("slideshow", []))
 
     await reg["store_registry"].update_one(
         {"handle": handle, "store": store},
@@ -644,7 +682,7 @@ async def provision_store(
     )
     KNOWN_HANDLES.add(handle)
     KNOWN_STORES.add(scope)
-    logger.info(f"Provisioned store '{scope}' ({name})")
+    logger.info(f"Provisioned store '{scope}' ({name}) from '{template_key or 'retail'}' template")
     return {"handle": handle, "store": store, "scope": scope, "name": name}
 
 
@@ -832,7 +870,10 @@ async def reconcile_stores(engine, drop_orphans: bool = False) -> dict[str, Any]
         if not scope or (updated is not None and updated > cutoff):
             continue
         try:
-            await provision_store(engine, handle, store, doc.get("name") or store, doc.get("owner_email"))
+            await provision_store(
+                engine, handle, store, doc.get("name") or store,
+                doc.get("owner_email"), template=doc.get("template") or "",
+            )
             result["retried"].append(scope)
             await _audit_store_event(engine, "store_provision_retried", handle, store)
         except Exception as exc:  # noqa: BLE001 — surface as failed, never crash the pass
@@ -1562,6 +1603,7 @@ async def manage_home(request: Request):
             "namespaces": namespaces,
             "can_create": can_create,
             "owned_handles": owned_handles,
+            "store_templates": STORE_TEMPLATES,
             "store": {},
         },
     )
@@ -1618,8 +1660,9 @@ async def _assert_namespace_owner(request: Request, handle: str) -> dict[str, An
 async def manage_create_store(request: Request) -> JSONResponse:
     """Provision a store under a handle (owner of that handle, or superuser).
 
-    Body: ``{handle, slug|store, name}``. Owners may only create under a handle
-    they already own; the superuser may create under any handle.
+    Body: ``{handle, slug|store, name, business_type}``. Owners may only create
+    under a handle they already own; the superuser may create under any handle.
+    ``business_type`` selects the starter template (retail default).
     """
     user = await get_current_user(request)
     if not user:
@@ -1644,7 +1687,10 @@ async def manage_create_store(request: Request) -> JSONResponse:
 
     owner_email = rbac.normalize_email(user.get("email"))
     try:
-        result = await provision_store(engine, handle, store, str(body.get("name") or ""), owner_email)
+        result = await provision_store(
+            engine, handle, store, str(body.get("name") or ""), owner_email,
+            template=str(body.get("business_type") or ""),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -1947,7 +1993,7 @@ async def signup_page(request: Request):
     """Public "claim your handle + create your first store" page."""
     user = await get_current_user(request)
     return _templates.TemplateResponse(
-        request, "signup.html", {"user": user, "store": {}}
+        request, "signup.html", {"user": user, "store_templates": STORE_TEMPLATES, "store": {}}
     )
 
 
@@ -1989,7 +2035,10 @@ async def signup(
         await pdb["users"].update_one({"_id": created["_id"]}, {"$set": {"handle": handle}})
 
     try:
-        result = await provision_store(engine, handle, store, str(body.get("store_name") or ""), email)
+        result = await provision_store(
+            engine, handle, store, str(body.get("store_name") or ""), email,
+            template=str(body.get("business_type") or ""),
+        )
     except ValueError as exc:
         # Roll back the just-created user so the handle/email stay claimable.
         with contextlib.suppress(Exception):

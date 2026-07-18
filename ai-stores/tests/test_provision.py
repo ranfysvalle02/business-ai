@@ -38,6 +38,37 @@ async def test_provision_is_idempotent(app):
     assert handle in main.KNOWN_HANDLES
 
 
+async def test_business_type_template_selects_starter_content(app):
+    engine = app.state.engine
+
+    # A restaurant store seeds the restaurant template (schema.org Restaurant,
+    # a "Menu" section) and records the template on the registry row.
+    r_handle = f"resto{uuid.uuid4().hex[:8]}"
+    r_scope = main.scope_id(r_handle, "shop")
+    await main.provision_store(engine, r_handle, "shop", "Chez Test", template="restaurant")
+    rdb = await engine.get_scoped_db(r_scope)
+    rstore = await rdb["stores"].find_one({}) or {}
+    assert rstore.get("business_type") == "restaurant"
+    assert rstore.get("schema_type") == "Restaurant"
+    assert await rdb["sections"].count_documents({"anchor": "menu"}) == 1
+
+    reg = await main._platform_db(engine)
+    row = await reg["store_registry"].find_one({"handle": r_handle, "store": "shop"})
+    assert row.get("template") == "restaurant"
+
+    # A blank/unknown type falls back to the default (retail) template.
+    d_handle = f"deflt{uuid.uuid4().hex[:8]}"
+    d_scope = main.scope_id(d_handle, "shop")
+    await main.provision_store(engine, d_handle, "shop", "Default Co", template="does-not-exist")
+    ddb = await engine.get_scoped_db(d_scope)
+    dstore = await ddb["stores"].find_one({}) or {}
+    assert dstore.get("business_type") == "retail"
+
+    # "retail" is always offered in the create/signup UIs.
+    assert "retail" in main.STORE_TEMPLATES
+    assert "restaurant" in main.STORE_TEMPLATES
+
+
 async def test_item_code_unique_within_store_but_not_across(admin_client, stores):
     code = f"DUP-{uuid.uuid4().hex[:6]}"
 

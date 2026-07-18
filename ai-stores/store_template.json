@@ -1,5 +1,5 @@
 {
-  "_comment": "Default content copied into every newly provisioned store scope. `name` and `slug_id` on the single store document are overwritten per store at provision time (see provision_store in main.py). Everything else is starter content the admin edits from the dashboard. Seeded idempotently via mdb_engine.core.seeding.seed_initial_data — one document set per store scope ({slug}_stores, {slug}_items, ...).",
+  "_comment": "Default (retail) starter content, copied into a new store scope when it is provisioned with business_type=\"retail\" or a blank/unknown type. Alternate verticals live in store_template.<key>.json (e.g. store_template.restaurant.json) — see _load_store_template / provision_store in main.py. `name` and `slug_id` on the single store document are overwritten per store at provision time; everything else is starter content the admin edits from the dashboard. Seeded idempotently (additive by key) into one document set per store scope: {handle}__{store}_stores, {handle}__{store}_items, ...",
 
   "stores": [
     {
