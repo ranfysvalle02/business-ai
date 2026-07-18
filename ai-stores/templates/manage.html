@@ -122,6 +122,13 @@
       </button>
     </form>
     <p id="create-status" class="text-sm mt-3 hidden"></p>
+    <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mt-4 pt-4 border-t border-store-text/10">
+      <button type="button" id="quick-store-btn"
+              class="shrink-0 inline-flex items-center justify-center gap-2 px-4 py-2 bg-store-text/10 text-store-text border border-store-text/20 rounded-store hover:bg-store-text/20 transition text-sm font-semibold">
+        <i class="fas fa-bolt text-store-primary"></i><span data-label>Quick store</span>
+      </button>
+      <span class="text-xs text-store-muted">One click spins up a starter “My&nbsp;Store” with a free address — then customize everything in the admin.</span>
+    </div>
   </div>
   {% endif %}
 
@@ -331,6 +338,37 @@
           clabel.textContent = 'Create';
         }
       });
+
+      // ── Quick store: one-click "hello world" store ────────────────
+      var quickBtn = document.getElementById('quick-store-btn');
+      if (quickBtn) {
+        var qlabel = quickBtn.querySelector('[data-label]');
+        quickBtn.addEventListener('click', async function () {
+          status.classList.add('hidden');
+          quickBtn.setAttribute('aria-busy', 'true');
+          quickBtn.disabled = true;
+          qlabel.textContent = 'Setting up…';
+          try {
+            var res = await fetch('/manage/stores/quick', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'same-origin',
+              body: JSON.stringify({ handle: handleEl ? handleEl.value.trim() : '' })
+            });
+            var data = await res.json().catch(function () { return {}; });
+            if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+            status.textContent = 'Created /' + data.handle + '/' + data.store + ' — opening the editor…';
+            status.className = 'text-sm mt-3 text-green-400';
+            window.location.href = data.admin_url;
+          } catch (err) {
+            status.textContent = String((err && err.message) || err);
+            status.className = 'text-sm mt-3 text-red-400';
+            quickBtn.removeAttribute('aria-busy');
+            quickBtn.disabled = false;
+            qlabel.textContent = 'Quick store';
+          }
+        });
+      }
     }
   })();
 

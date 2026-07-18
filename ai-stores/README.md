@@ -114,9 +114,17 @@ Pieces in [`main.py`](main.py) + [`rbac.py`](rbac.py):
 ## Creating a store
 
 **Self-serve (new users):** open `/signup`, pick a globally unique **handle**,
-an email/password, a first store slug, and a **store type**. This creates a
-non-admin `member` user, provisions `{handle}__{store}` from the matching starter
-template, and makes you the `owner` of the handle.
+an email/password, a first store slug, and a **store type**. The form does the
+work for you — it suggests a handle from your email, an address from the store
+name, and shows a live `/handle/store` preview. This creates a non-admin `member`
+user, provisions `{handle}__{store}` from the matching starter template, and
+makes you the `owner` of the handle.
+
+**Quick store (one click):** signed in at `/manage`, hit **Quick store** to
+instantly spin up a starter "My Store" at a free address (`store`, `store-2`, …,
+retail template) and drop straight into its admin — nothing to fill in. It uses
+your namespace automatically (superusers name one), so you can go from account to
+editable storefront in a single click.
 
 **From the UI (existing owner/superuser):** sign in at `/manage`, pick a handle
 you own, enter a name, choose a type, submit. The store slug is suggested from the
@@ -126,9 +134,14 @@ the same way and are globally unique.
 **From the API** (owner of the handle, or superuser):
 
 ```bash
+# Named store
 curl -b cookies.txt -H 'Content-Type: application/json' \
   -d '{"handle":"acme","slug":"coffee","name":"Acme Coffee","business_type":"restaurant"}' \
   http://localhost:8000/manage/stores
+
+# Quick store (auto address + name)
+curl -b cookies.txt -H 'Content-Type: application/json' \
+  -d '{"handle":"acme"}' http://localhost:8000/manage/stores/quick
 ```
 
 Provisioning (`provision_store`) is idempotent and step-logged: validate handle

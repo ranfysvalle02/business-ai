@@ -1706,6 +1706,80 @@ async def manage_create_store(request: Request) -> JSONResponse:
     )
 
 
+async def _free_store_slug(reg, handle: str, base: str = "store") -> str:
+    """Return a store slug under ``handle`` that isn't taken (``base``, ``base-2``, …)."""
+    taken: set[str] = set()
+    async for doc in reg["store_registry"].find({"handle": handle}, {"store": 1}):
+        if doc.get("store"):
+            taken.add(doc["store"])
+    if base not in taken:
+        return base
+    n = 2
+    while f"{base}-{n}" in taken:
+        n += 1
+    return f"{base}-{n}"
+
+
+@app.post("/manage/stores/quick")
+async def manage_quick_store(request: Request) -> JSONResponse:
+    """One-click "hello world" store — auto-named, auto-addressed, ready to edit.
+
+    Body: ``{handle?}``. Owners get a fresh store under a handle they own (their
+    only handle if unspecified); the superuser must name a ``handle``. The slug
+    auto-increments (``store``, ``store-2``, …) so it never collides, and the
+    caller can rename/customise everything from the admin right away.
+    """
+    user = await get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="authentication required")
+    engine = app.state.engine
+    reg = await _platform_db(engine)
+
+    body = await _read_request_body(request)
+    raw_handle = str(body.get("handle") or "").strip().lower()
+    if not raw_handle:
+        # No handle given: fall back to the caller's sole owned namespace.
+        namespaces, _ = await _namespaces_for_user(engine, user)
+        owned = [ns["handle"] for ns in namespaces if ns["is_owner"]]
+        if len(owned) == 1:
+            raw_handle = owned[0]
+        elif not owned:
+            raise HTTPException(status_code=422, detail="claim a handle first at /signup")
+        else:
+            raise HTTPException(status_code=422, detail="choose which namespace to create under")
+    try:
+        handle = _validate_slug(raw_handle)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    await _assert_namespace_owner(request, handle)
+
+    if MAX_STORES_PER_HANDLE and not rbac.is_platform_superuser(user):
+        count = await reg["store_registry"].count_documents({"handle": handle})
+        if count >= MAX_STORES_PER_HANDLE:
+            raise HTTPException(status_code=409, detail="store limit reached for this namespace")
+
+    store = await _free_store_slug(reg, handle)
+    owner_email = rbac.normalize_email(user.get("email"))
+    result = await provision_store(engine, handle, store, "My Store", owner_email, template="retail")
+
+    if not await rbac.count_owners(reg["namespace_members"], handle):
+        await rbac.add_member(reg["namespace_members"], handle, owner_email, rbac.ROLE_OWNER)
+
+    await _audit_store_event(engine, "store_created", handle, store, user, name=result["name"])
+    return JSONResponse(
+        {
+            "ok": True,
+            "handle": handle,
+            "store": store,
+            "name": result["name"],
+            "url": _store_url(handle, store),
+            "admin_url": f"/{handle}/{store}/admin/dashboard",
+        },
+        status_code=201,
+    )
+
+
 async def _require_store_row(engine, handle: str, store: str) -> dict[str, Any]:
     """Fetch a registry row for a lifecycle op, or raise 404."""
     reg = await _platform_db(engine)

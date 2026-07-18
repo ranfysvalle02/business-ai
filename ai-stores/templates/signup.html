@@ -63,6 +63,8 @@
                class="bg-store-bg text-store-text border border-store-text/20 rounded-store focus:outline-none focus:ring-2 focus:ring-store-primary/40 focus:border-store-primary w-full px-3 py-2 font-mono text-sm">
       </div>
     </div>
+    <p class="text-sm text-store-muted -mt-1">Your store will live at
+      <span id="url-preview" class="font-mono text-store-primary">/handle/shop</span></p>
     <div>
       <label for="business_type" class="block text-sm font-medium text-store-muted mb-1">Store type</label>
       <select id="business_type" name="business_type"
@@ -91,6 +93,34 @@
     var errMsg = document.getElementById('signup-error-msg');
     var btn = document.getElementById('signup-submit');
     var label = btn.querySelector('[data-label]');
+
+    // ── Effortless defaults: suggest handle from email, address from name,
+    //    and keep a live /handle/store preview in sync. ────────────────
+    var preview = document.getElementById('url-preview');
+    var handleEdited = false, slugEdited = false;
+    function slugify(v) {
+      return String(v || '').toLowerCase().trim()
+        .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+    }
+    function updatePreview() {
+      if (!preview) return;
+      preview.textContent = '/' + (slugify(form.handle.value) || 'handle') +
+                            '/' + (slugify(form.slug.value) || 'shop');
+    }
+    form.handle.addEventListener('input', function () { handleEdited = true; updatePreview(); });
+    form.slug.addEventListener('input', function () { slugEdited = true; updatePreview(); });
+    form.email.addEventListener('input', function () {
+      if (handleEdited) return;
+      form.handle.value = slugify((form.email.value.split('@')[0]) || '');
+      updatePreview();
+    });
+    form.store_name.addEventListener('input', function () {
+      if (slugEdited) return;
+      form.slug.value = slugify(form.store_name.value) || 'shop';
+      updatePreview();
+    });
+    updatePreview();
+
     form.addEventListener('submit', async function (ev) {
       ev.preventDefault();
       errBox.classList.add('hidden');

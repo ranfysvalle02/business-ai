@@ -55,8 +55,15 @@ Three ways, depending on who you are:
 
 **Self-serve (new user)** — open `/signup`, pick a globally unique **handle**,
 an email + password (min 8 chars), a first store slug, and a **store type**
-(`retail` or `restaurant`). You become the `owner` of that handle, and land in
-your new store's admin.
+(`retail` or `restaurant`). The form fills itself in as you type — it suggests a
+handle from your email, an address from the store name, and previews your live
+`/handle/store` URL. You become the `owner` of that handle, and land in your new
+store's admin.
+
+**Quick store (one click)** — signed in at `/manage`, click **Quick store**. It
+provisions a starter "My Store" at the next free address (`store`, `store-2`, …)
+and opens its admin immediately — zero fields to fill. Fastest path from account
+to an editable storefront.
 
 **From the console** — sign in at `/manage`. A superuser can create under any
 handle; an owner picks one of their handles, enters a name, chooses a type, and
@@ -72,9 +79,14 @@ make provision-store HANDLE=acme STORE=coffee NAME="Acme Coffee"
 **From the API** (owner of the handle, or superuser):
 
 ```bash
+# Named store
 curl -b cookies.txt -H 'Content-Type: application/json' \
   -d '{"handle":"acme","slug":"coffee","name":"Acme Coffee","business_type":"restaurant"}' \
   http://localhost:8000/manage/stores
+
+# Quick store — auto address + name, retail template
+curl -b cookies.txt -H 'Content-Type: application/json' \
+  -d '{"handle":"acme"}' http://localhost:8000/manage/stores/quick
 ```
 
 The store is registered, indexed, and seeded from the starter template for its

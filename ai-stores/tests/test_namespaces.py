@@ -74,3 +74,41 @@ async def test_data_isolated_between_namespaces(admin_client, stores):
     await admin_client.post("/acme/shop/api/items", json={"name": "iso", "item_code": code})
     globex = await admin_client.get("/globex/shop/api/items")
     assert code not in globex.text
+
+
+# ── Quick store: one-click "hello world" onboarding ───────────────────────
+
+
+async def test_quick_store_owner_gets_ready_store(owner_client, stores):
+    res = await owner_client.post("/manage/stores/quick", json={"handle": "acme"})
+    assert res.status_code == 201, res.text
+    data = res.json()
+    assert data["handle"] == "acme"
+    assert data["store"]  # auto-addressed
+    # The starter store is immediately live and editable by the owner.
+    assert (await owner_client.get(data["url"])).status_code == 200
+    assert (await owner_client.get(data["admin_url"])).status_code == 200
+
+
+async def test_quick_store_auto_increments_address(admin_client, stores):
+    handle = f"quick-{uuid.uuid4().hex[:8]}"
+    first = await admin_client.post("/manage/stores/quick", json={"handle": handle})
+    second = await admin_client.post("/manage/stores/quick", json={"handle": handle})
+    assert first.status_code == 201 and second.status_code == 201
+    assert first.json()["store"] == "store"
+    assert second.json()["store"] == "store-2"
+
+
+async def test_quick_store_forbidden_for_viewer(viewer_client, stores):
+    res = await viewer_client.post("/manage/stores/quick", json={"handle": "acme"})
+    assert res.status_code == 403, res.text
+
+
+async def test_quick_store_outsider_without_handle_is_guided(outsider_client, stores):
+    res = await outsider_client.post("/manage/stores/quick", json={})
+    assert res.status_code == 422, res.text
+
+
+async def test_quick_store_requires_auth(anon_client, stores):
+    res = await anon_client.post("/manage/stores/quick", json={"handle": "acme"})
+    assert res.status_code in (401, 403), res.text
