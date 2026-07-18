@@ -15,7 +15,7 @@ PY      ?= python3
 
 .DEFAULT_GOAL := help
 
-.PHONY: help init secrets up up-d down restart logs ps clean build provision-store reconcile archive-store restore-store delete-store test test-deps
+.PHONY: help init secrets up up-d down restart logs ps clean build provision-store reconcile archive-store restore-store delete-store export-store import-store test test-deps
 
 # Log in as the .env admin into a temp cookie jar ($$JAR), setting $$BASE.
 # Used by the store-management targets below; keeps each recipe a one-liner.
@@ -108,6 +108,22 @@ delete-store: ## Permanently deprovision a store (drops all data): make delete-s
 	 echo "Deleting '/$(HANDLE)/$(STORE)' at $$BASE (irreversible) ..."; \
 	 curl -s -b $$JAR -X DELETE -H 'Content-Type: application/json' \
 	   -d "{\"confirm\":\"$(STORE)\"}" $$BASE/manage/stores/$(HANDLE)/$(STORE); \
+	 echo; rm -f $$JAR
+
+export-store: ## Dump a store to FILE (default {handle}__{store}-export.json): make export-store HANDLE=acme STORE=coffee
+	@test -n "$(HANDLE)" -a -n "$(STORE)" || { echo 'Usage: make export-store HANDLE=acme STORE=coffee [FILE=out.json]'; exit 1; }
+	@$(login_admin); \
+	 OUT=$${FILE:-$(HANDLE)__$(STORE)-export.json}; \
+	 curl -sf -b $$JAR $$BASE/manage/stores/$(HANDLE)/$(STORE)/export -o $$OUT \
+	   && echo "Wrote $$OUT" || echo "Export failed."; \
+	 rm -f $$JAR
+
+import-store: ## Restore a store from FILE (OVERWRITE=1 to replace data): make import-store HANDLE=acme STORE=coffee FILE=out.json
+	@test -n "$(HANDLE)" -a -n "$(STORE)" -a -n "$(FILE)" || { echo 'Usage: make import-store HANDLE=acme STORE=coffee FILE=out.json [OVERWRITE=1]'; exit 1; }
+	@$(login_admin); \
+	 URL="$$BASE/manage/stores/$(HANDLE)/$(STORE)/import"; \
+	 [ "$(OVERWRITE)" = "1" ] && URL="$$URL?overwrite=1"; \
+	 curl -s -b $$JAR -X POST -H 'Content-Type: application/json' --data-binary @$(FILE) "$$URL"; \
 	 echo; rm -f $$JAR
 
 reconcile: ## Finish stuck provisions/deletes and report orphans (DROP_ORPHANS=1 to drop them)

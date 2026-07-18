@@ -46,16 +46,19 @@ import json
 import logging
 import os
 import re
+import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import cloudinary
 import cloudinary.uploader
+from bson import json_util
 from cloudinary.utils import cloudinary_url
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware import Middleware
@@ -70,11 +73,14 @@ from mdb_engine.env import get_jwt_secret
 from mdb_engine.indexes import run_index_creation_for_collection
 from mdb_engine.routing._ssr import mount_ssr_routes
 
-import ai_editor
-import notifications
-import rbac
-
+# Load .env before importing local modules so their module-level configuration
+# (notably ai_editor's GEMINI_* settings) picks up values from .env on local and
+# `uvicorn`-driven runs, not just when the vars are exported (e.g. via compose).
 load_dotenv()
+
+import ai_editor  # noqa: E402
+import notifications  # noqa: E402
+import rbac  # noqa: E402
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -143,7 +149,7 @@ PLATFORM_SLUG: str = _manifest_data["slug"]
 
 # First path segments that are global — never a namespace, never scoped.
 RESERVED_SEGMENTS = frozenset(
-    {"static", "__mdb", "health", "favicon.ico", "robots.txt", "auth", "manage", "signup"}
+    {"static", "__mdb", "health", "healthz", "readyz", "favicon.ico", "robots.txt", "auth", "manage", "signup"}
 )
 # Slugs that would collide with a global route's first segment (handles), or
 # with a store's own sub-paths (stores), or with the platform scope's own
@@ -435,6 +441,48 @@ class StoreScopeMiddleware:
 app.add_middleware(StoreScopeMiddleware)
 
 
+class RequestIDMiddleware:
+    """Assign every request an ``X-Request-ID`` and emit one structured log line.
+
+    Pure-ASGI and installed **outermost** (after ``StoreScopeMiddleware`` below,
+    so it wraps it), so even the middleware's own 404s get an id + access log.
+    Honours an inbound ``X-Request-ID`` (e.g. from a proxy) and echoes it back on
+    the response so a client log line can be correlated to a server one.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        inbound = dict(scope.get("headers") or {}).get(b"x-request-id")
+        rid = inbound.decode("latin-1")[:64] if inbound else uuid.uuid4().hex[:16]
+        scope["request_id"] = rid
+        started = time.perf_counter()
+        status_code = 0
+
+        async def send_wrapper(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+                message["headers"] = [*message.get("headers", []), (b"x-request-id", rid.encode("latin-1"))]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            logger.info(
+                "req id=%s %s %s -> %s %.1fms",
+                rid, scope.get("method"), scope.get("path"),
+                status_code, (time.perf_counter() - started) * 1000.0,
+            )
+
+
+app.add_middleware(RequestIDMiddleware)
+
+
 class StoreRoleOverlayMiddleware(BaseHTTPMiddleware):
     """Layer per-namespace authorization onto the engine's global identity.
 
@@ -492,11 +540,46 @@ class StoreRoleOverlayMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class QuotaMiddleware(BaseHTTPMiddleware):
+    """Enforce per-store creation caps on the engine's auto-CRUD write path.
+
+    On ``POST /{handle}/{store}/api/{items|sections}`` it counts the store's
+    ``{scope}_{collection}`` and returns ``409`` when the (env-configured) cap
+    is reached. Caps default to ``0`` (unlimited). AI-driven creates bypass this
+    CRUD path, so ``/admin/ai/apply`` enforces the same caps itself.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        scope = request.scope
+        slug = scope.get("store_slug")
+        if slug and request.method == "POST":
+            root = scope.get("root_path", "")
+            remainder = ((scope.get("path") or "")[len(root):] or "/").rstrip("/")
+            collection, cap = "", 0
+            if remainder == "/api/items":
+                collection, cap = "items", MAX_ITEMS_PER_STORE
+            elif remainder == "/api/sections":
+                collection, cap = "sections", MAX_SECTIONS_PER_STORE
+            if collection and cap:
+                try:
+                    count = await _store_doc_count(request.app.state.engine, slug, collection)
+                except Exception:  # noqa: BLE001 — a counting error must not block writes
+                    count = 0
+                if count >= cap:
+                    return JSONResponse(
+                        {"detail": f"{collection} limit reached ({cap}) for this store"},
+                        status_code=409,
+                    )
+        return await call_next(request)
+
+
 # Append (not add_middleware) so the overlay is the INNERMOST middleware: it
 # runs last on ingress, after the engine's AppUserSessionMiddleware has set
 # request.state.user, while StoreScopeMiddleware (outermost) has already set
-# scope["handle"]. Rebuild the stack now that both are registered.
+# scope["handle"]. QuotaMiddleware is even further in (closest to the route) so
+# it sees the resolved scope. Rebuild the stack now that all are registered.
 app.user_middleware.append(Middleware(StoreRoleOverlayMiddleware))
+app.user_middleware.append(Middleware(QuotaMiddleware))
 app.middleware_stack = app.build_middleware_stack()
 
 
@@ -740,6 +823,12 @@ async def _ensure_registry_indexes(engine) -> None:
         await members.create_index("email", name="ns_member_email")
     except Exception as exc:  # noqa: BLE001 — never block boot on index creation
         logger.warning(f"namespace_members index creation skipped: {exc}")
+
+
+async def _store_doc_count(engine, scope: str, collection: str) -> int:
+    """Count docs in the physical ``{scope}_{collection}`` collection."""
+    raw_db = engine.connection_manager.mongo_db
+    return await raw_db[f"{scope}_{collection}"].count_documents({})
 
 
 async def _drop_store_collections(engine, scope: str) -> list[str]:
@@ -1104,6 +1193,11 @@ async def _lifespan_with_bootstrap(app_):
             logger.warning(f"Rate limiter setup skipped: {exc}")
             app_.state.rate_store = None
             app_.state.rate_limits = {}
+
+        # Surface the AI editor's configuration once, clearly, at boot so an
+        # operator immediately knows whether the conversational editor is live.
+        ai_editor.log_startup_config()
+
         await _bootstrap_stores()
 
         # Best-effort reconcile on boot: finish provisions/deletes that a prior
@@ -1239,6 +1333,39 @@ async def submit_inquiry(
     )
 
 
+async def _check_upload_quota(request: Request) -> tuple[str, str]:
+    """Enforce ``MAX_UPLOADS_PER_STORE`` before an upload. Returns ``(handle, store)``.
+
+    The persisted per-store ``upload_count`` on the registry row is the source
+    of truth (Cloudinary assets aren't enumerated per store), incremented on
+    each successful upload by ``_increment_upload_count``.
+    """
+    handle = request.scope.get("handle") or ""
+    store = request.scope.get("store") or ""
+    if MAX_UPLOADS_PER_STORE and handle and store:
+        reg = await _platform_db(request.app.state.engine)
+        row = await reg["store_registry"].find_one(
+            {"handle": handle, "store": store}, {"upload_count": 1}
+        )
+        if row and int(row.get("upload_count") or 0) >= MAX_UPLOADS_PER_STORE:
+            raise HTTPException(
+                status_code=409,
+                detail=f"upload limit reached ({MAX_UPLOADS_PER_STORE}) for this store",
+            )
+    return handle, store
+
+
+async def _increment_upload_count(request: Request, handle: str, store: str) -> None:
+    """Best-effort ``$inc`` of the store's persisted upload counter."""
+    if not (handle and store):
+        return
+    with contextlib.suppress(Exception):
+        reg = await _platform_db(request.app.state.engine)
+        await reg["store_registry"].update_one(
+            {"handle": handle, "store": store}, {"$inc": {"upload_count": 1}}
+        )
+
+
 @app.post("/admin/upload-image")
 async def upload_image(
     request: Request,
@@ -1253,6 +1380,7 @@ async def upload_image(
     superuser), consistent with every other store-write surface.
     """
     await _require_store_write(request)
+    handle, store = await _check_upload_quota(request)
 
     if not (_cloud_name and _cloud_key and _cloud_secret):
         raise HTTPException(status_code=503, detail="Cloudinary not configured")
@@ -1269,6 +1397,7 @@ async def upload_image(
         folder=folder,
         transformation=[{"quality": "auto", "fetch_format": "auto"}],
     )
+    await _increment_upload_count(request, handle, store)
     return JSONResponse(
         {
             "ok": True,
@@ -1318,6 +1447,7 @@ async def upload_video(
 ) -> JSONResponse:
     """Owner/editor Cloudinary video upload with intelligent compression."""
     await _require_store_write(request)
+    handle, store = await _check_upload_quota(request)
 
     if not (_cloud_name and _cloud_key and _cloud_secret):
         raise HTTPException(status_code=503, detail="Cloudinary not configured")
@@ -1359,6 +1489,7 @@ async def upload_video(
         version=version,
     )
 
+    await _increment_upload_count(request, handle, store)
     return JSONResponse(
         {
             "ok": True,
@@ -1504,6 +1635,20 @@ async def ai_apply(
             detail="; ".join(errors) or "no valid operations to apply",
         )
 
+    # AI creates bypass the CRUD path QuotaMiddleware guards, so enforce the
+    # same per-store caps here against a fresh count (batch size included).
+    for tool, (coll, cap) in {
+        "create_item": ("items", MAX_ITEMS_PER_STORE),
+        "add_section": ("sections", MAX_SECTIONS_PER_STORE),
+    }.items():
+        if not cap:
+            continue
+        adding = sum(1 for op in normalized if op.get("tool") == tool)
+        if adding and await db[coll].count_documents({}) + adding > cap:
+            raise HTTPException(
+                status_code=409, detail=f"{coll} limit reached ({cap}) for this store"
+            )
+
     results = await ai_editor.apply_ops(db, normalized, user)
     ok = all(r.get("ok") for r in results)
     return JSONResponse(
@@ -1520,8 +1665,11 @@ async def ai_apply(
 # namespace_members and are enforced by StoreRoleOverlayMiddleware.
 
 INVITE_TTL_SECONDS = int(os.getenv("INVITE_TTL_SECONDS", str(7 * 24 * 3600)))
-# Optional guard on self-serve abuse: cap stores per owned handle (0 = off).
+# Optional guards on self-serve abuse (0 = unlimited for each).
 MAX_STORES_PER_HANDLE = int(os.getenv("MAX_STORES_PER_HANDLE", "0"))
+MAX_ITEMS_PER_STORE = int(os.getenv("MAX_ITEMS_PER_STORE", "0"))
+MAX_SECTIONS_PER_STORE = int(os.getenv("MAX_SECTIONS_PER_STORE", "0"))
+MAX_UPLOADS_PER_STORE = int(os.getenv("MAX_UPLOADS_PER_STORE", "0"))
 
 
 def _invite_secret() -> str:
@@ -1533,7 +1681,7 @@ def _store_url(handle: str, store: str) -> str:
     return f"/{handle}/{store}/"
 
 
-def _card_from_row(doc: dict[str, Any]) -> dict[str, str]:
+def _card_from_row(doc: dict[str, Any]) -> dict[str, Any]:
     handle = doc.get("handle", "")
     store = doc.get("store", "")
     return {
@@ -1545,6 +1693,29 @@ def _card_from_row(doc: dict[str, Any]) -> dict[str, str]:
         "admin_url": f"/{handle}/{store}/admin/dashboard",
         "team_url": f"/{handle}/{store}/admin/team",
     }
+
+
+async def _store_usage(engine, doc: dict[str, Any]) -> list[dict[str, Any]]:
+    """Per-store usage badges (count + optional cap) for the console.
+
+    Cheap single-collection counts for items/sections plus the persisted
+    upload counter. ``cap`` of ``0`` means unlimited (rendered as ``X`` only).
+    """
+    scope = scope_id(doc.get("handle", ""), doc.get("store", ""))
+    usage: list[dict[str, Any]] = []
+    for label, collection, cap in (
+        ("items", "items", MAX_ITEMS_PER_STORE),
+        ("sections", "sections", MAX_SECTIONS_PER_STORE),
+    ):
+        try:
+            count = await _store_doc_count(engine, scope, collection)
+        except Exception:  # noqa: BLE001 — a badge must never break the console
+            count = 0
+        usage.append({"label": label, "count": count, "cap": cap})
+    usage.append(
+        {"label": "uploads", "count": int(doc.get("upload_count") or 0), "cap": MAX_UPLOADS_PER_STORE}
+    )
+    return usage
 
 
 async def _namespaces_for_user(engine, user: dict[str, Any] | None) -> tuple[list[dict[str, Any]], bool]:
@@ -1576,9 +1747,11 @@ async def _namespaces_for_user(engine, user: dict[str, Any] | None) -> tuple[lis
     for handle in sorted(roles):
         role = roles[handle]
         is_owner = superuser or role == rbac.ROLE_OWNER
-        stores: list[dict[str, str]] = []
+        stores: list[dict[str, Any]] = []
         async for doc in reg["store_registry"].find({"handle": handle}).sort("created_at", 1):
-            stores.append(_card_from_row(doc))
+            card = _card_from_row(doc)
+            card["usage"] = await _store_usage(engine, doc)
+            stores.append(card)
         namespaces.append(
             {"handle": handle, "role": role, "is_owner": is_owner, "stores": stores}
         )
@@ -1889,6 +2062,131 @@ async def manage_delete_store(handle: str, store: str, request: Request) -> JSON
     return JSONResponse({"ok": True, "handle": handle, "store": store, "dropped": dropped})
 
 
+async def _store_collection_names(engine, scope: str) -> list[str]:
+    """Physical ``{scope}_*`` collection names (exact prefix, trailing ``_``)."""
+    raw_db = engine.connection_manager.mongo_db
+    prefix = f"{scope}_"
+    return sorted(n for n in await raw_db.list_collection_names() if n.startswith(prefix))
+
+
+@app.get("/manage/stores/{handle}/{store}/export")
+async def manage_export_store(handle: str, store: str, request: Request) -> JSONResponse:
+    """Dump every ``{scope}_*`` collection as portable JSON (owner/superuser).
+
+    Uses ``bson.json_util`` so ObjectIds and dates round-trip cleanly. The
+    result is a single JSON document a caller can save and later re-``import``;
+    it is the low-risk, blast-radius mitigation for the shared-DB model.
+    """
+    engine = app.state.engine
+    await _require_store_row(engine, handle, store)
+    user = await _assert_namespace_owner(request, handle)
+
+    scope = scope_id(handle, store)
+    raw_db = engine.connection_manager.mongo_db
+    prefix = f"{scope}_"
+    collections: dict[str, list[Any]] = {}
+    total = 0
+    for full in await _store_collection_names(engine, scope):
+        short = full[len(prefix):]
+        docs = await raw_db[full].find({}).to_list(length=None)
+        collections[short] = docs
+        total += len(docs)
+
+    await _audit_store_event(engine, "store_exported", handle, store, user, documents=total)
+    # Emit MongoDB Extended JSON (via json_util) as a raw body so ObjectIds and
+    # dates survive verbatim; JSONResponse would re-encode and choke on them.
+    body = json_util.dumps(
+        {"handle": handle, "store": store, "scope": scope, "collections": collections},
+        ensure_ascii=False,
+    )
+    filename = f"{scope}-export.json"
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/manage/stores/{handle}/{store}/import")
+async def manage_import_store(handle: str, store: str, request: Request) -> JSONResponse:
+    """Restore an ``export`` dump into ``{handle}/{store}`` (owner/superuser).
+
+    Provisions the scope if missing, then inserts each collection's docs into
+    ``{scope}_{name}`` via ``json_util`` (so ids/dates round-trip). Refuses to
+    write into a non-empty target unless ``?overwrite=1`` (which first drops the
+    scope's collections). This is a coarse, whole-store restore, not a merge.
+    """
+    engine = app.state.engine
+    user = await _assert_namespace_owner(request, handle)
+    try:
+        handle = _validate_slug(handle)
+        store = _validate_slug(store)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    raw_body = await request.body()
+    try:
+        payload = json_util.loads(raw_body.decode("utf-8")) if raw_body else {}
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="body must be valid export JSON") from exc
+    collections = payload.get("collections") if isinstance(payload, dict) else None
+    if not isinstance(collections, dict) or not collections:
+        raise HTTPException(status_code=422, detail="no 'collections' found in the import body")
+
+    scope = scope_id(handle, store)
+    overwrite = request.query_params.get("overwrite") in ("1", "true", "yes")
+
+    # Ensure the target exists so its scope routes and has indexes. A store we
+    # create here is brand new (its only content is the provisioning seed), so
+    # we treat it as an implicit overwrite target — the caller is restoring.
+    reg = await _platform_db(engine)
+    created = await reg["store_registry"].find_one({"handle": handle, "store": store}) is None
+    if created:
+        await provision_store(engine, handle, store, str(payload.get("name") or store), user.get("email"))
+        if not await rbac.count_owners(reg["namespace_members"], handle):
+            await rbac.add_member(
+                reg["namespace_members"], handle, rbac.normalize_email(user.get("email")), rbac.ROLE_OWNER
+            )
+
+    raw_db = engine.connection_manager.mongo_db
+    non_empty = False
+    for full in await _store_collection_names(engine, scope):
+        if await raw_db[full].estimated_document_count() > 0:
+            non_empty = True
+            break
+    if non_empty and not overwrite and not created:
+        raise HTTPException(status_code=409, detail="target store has data; pass ?overwrite=1 to replace")
+    if overwrite or created:
+        await _drop_store_collections(engine, scope)
+
+    inserted: dict[str, int] = {}
+    for short, docs in collections.items():
+        if not isinstance(docs, list) or not docs:
+            continue
+        short = str(short)
+        if not re.fullmatch(r"[A-Za-z0-9_]+", short):
+            continue  # never let a crafted name escape the scope prefix
+        # The engine tags every doc with an ``app_id`` equal to its scope and
+        # filters reads on it, so re-home imported docs to the target scope
+        # (a dump from another store would otherwise be invisible here).
+        prepared = [
+            {**d, "app_id": scope} if isinstance(d, dict) and "app_id" in d else d
+            for d in docs
+        ]
+        await raw_db[f"{scope}_{short}"].insert_many(prepared)
+        inserted[short] = len(prepared)
+
+    await refresh_known_stores()
+    await _audit_store_event(
+        engine, "store_imported", handle, store, user,
+        documents=sum(inserted.values()), overwrite=overwrite,
+    )
+    logger.info(f"Imported {sum(inserted.values())} doc(s) into '{scope}' (overwrite={overwrite})")
+    return JSONResponse(
+        {"ok": True, "handle": handle, "store": store, "inserted": inserted, "overwrite": overwrite}
+    )
+
+
 @app.post("/manage/reconcile")
 async def manage_reconcile(request: Request) -> JSONResponse:
     """Run the store reconciler (platform superuser only).
@@ -2126,6 +2424,84 @@ async def signup(
     return JSONResponse(
         {"ok": True, "handle": handle, "store": store, "email": email, "url": _store_url(handle, store)},
         status_code=201,
+    )
+
+
+# ── Observability ────────────────────────────────────────────────────────
+#
+# /healthz is a pure liveness probe (process up). /readyz is a readiness probe
+# that actually pings Mongo, so a load balancer can drain a replica that lost
+# its database. /manage/status is a richer, superuser-only metrics snapshot.
+
+
+@app.get("/healthz")
+async def healthz() -> JSONResponse:
+    """Liveness: the process is up and serving. No dependencies touched."""
+    return JSONResponse({"status": "ok"})
+
+
+@app.get("/readyz")
+async def readyz(request: Request) -> JSONResponse:
+    """Readiness: verify Mongo answers a ping; report AI + store-count context.
+
+    Returns 200 only when the database is reachable; 503 otherwise, so
+    orchestrators route traffic away from a replica that can't serve data.
+    """
+    engine = getattr(app.state, "engine", None)
+    out: dict[str, Any] = {
+        "status": "ok",
+        "request_id": request.scope.get("request_id"),
+        "mongo": False,
+        "ai_configured": bool(ai_editor.GEMINI_API_KEY),
+    }
+    try:
+        await engine.connection_manager.mongo_db.command("ping")
+        out["mongo"] = True
+        reg = await _platform_db(engine)
+        out["stores"] = await reg["store_registry"].count_documents(_routable_status_query())
+    except Exception as exc:  # noqa: BLE001 — readiness must report, not raise
+        out["status"] = "unavailable"
+        out["error"] = str(exc)[:200]
+        return JSONResponse(out, status_code=503)
+    return JSONResponse(out)
+
+
+@app.get("/manage/status")
+async def manage_status(request: Request) -> JSONResponse:
+    """Superuser-only platform metrics snapshot (counts, not per-store scans)."""
+    await _require_platform_admin(request)
+    engine = app.state.engine
+    reg = await _platform_db(engine)
+
+    by_status: dict[str, int] = {}
+    handles: set[str] = set()
+    async for doc in reg["store_registry"].find({}, {"status": 1, "handle": 1}):
+        by_status[doc.get("status") or STORE_STATUS_READY] = (
+            by_status.get(doc.get("status") or STORE_STATUS_READY, 0) + 1
+        )
+        if doc.get("handle"):
+            handles.add(doc["handle"])
+
+    mongo_ok = True
+    with contextlib.suppress(Exception):
+        await engine.connection_manager.mongo_db.command("ping")
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "request_id": request.scope.get("request_id"),
+            "mongo": mongo_ok,
+            "ai": {"configured": bool(ai_editor.GEMINI_API_KEY), "model": ai_editor.GEMINI_MODEL},
+            "stores": {"total": sum(by_status.values()), "by_status": by_status},
+            "namespaces": len(handles),
+            "members": await reg["namespace_members"].count_documents({}),
+            "quotas": {
+                "max_stores_per_handle": MAX_STORES_PER_HANDLE,
+                "max_items_per_store": MAX_ITEMS_PER_STORE,
+                "max_sections_per_store": MAX_SECTIONS_PER_STORE,
+                "max_uploads_per_store": MAX_UPLOADS_PER_STORE,
+            },
+        }
     )
 
 

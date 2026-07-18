@@ -77,13 +77,23 @@ services:
       - INVITE_TTL_SECONDS=${INVITE_TTL_SECONDS:-604800}
       - MAX_STORES_PER_HANDLE=${MAX_STORES_PER_HANDLE:-0}
 
+      # ── Per-store quotas (0 = unlimited; enforced on CRUD + AI + uploads) ──
+      - MAX_ITEMS_PER_STORE=${MAX_ITEMS_PER_STORE:-0}
+      - MAX_SECTIONS_PER_STORE=${MAX_SECTIONS_PER_STORE:-0}
+      - MAX_UPLOADS_PER_STORE=${MAX_UPLOADS_PER_STORE:-0}
+
       # ── AI editor (Google Gemini) — powers the admin conversational editor ──
       # Uses Gemini's JSON/structured-output mode. The chat routes degrade
       # gracefully (503) until GEMINI_API_KEY is set; the storefront never
       # depends on it. Get a key at https://aistudio.google.com/apikey.
+      # GEMINI_FALLBACK_MODEL is retried once on a 404; 429/5xx get bounded
+      # retries with backoff (GEMINI_MAX_RETRIES / GEMINI_RETRY_BACKOFF).
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-3.5-flash}
+      - GEMINI_FALLBACK_MODEL=${GEMINI_FALLBACK_MODEL:-gemini-2.5-flash}
       - GEMINI_TEMPERATURE=${GEMINI_TEMPERATURE:-0.1}
+      - GEMINI_MAX_RETRIES=${GEMINI_MAX_RETRIES:-2}
+      - GEMINI_RETRY_BACKOFF=${GEMINI_RETRY_BACKOFF:-0.5}
     volumes:
       - ./static:/app/static:ro
       - ./templates:/app/templates:ro
@@ -94,11 +104,12 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
+      # App liveness probe (see /healthz; /readyz additionally pings Mongo).
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/__mdb/health/live', timeout=3).status==200 else 1)"
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=3).status==200 else 1)"
       interval: 30s
       timeout: 10s
       retries: 3

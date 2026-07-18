@@ -97,7 +97,7 @@ Four moving parts, all in [main.py](main.py) (+ [rbac.py](rbac.py)):
 - **Store scope** (one per `{handle}__{store}`) holds that store's `stores`
   singleton, `items`, `sections`, `specials`, `slideshow`, and `inquiries`.
 - **Reserved first segments** are never a handle: `static`, `__mdb`, `health`,
-  `favicon.ico`, `robots.txt`, `auth`, `manage`, `signup`. Handles and store
+  `healthz`, `readyz`, `favicon.ico`, `robots.txt`, `auth`, `manage`, `signup`. Handles and store
   slugs are validated (`^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$`, no `_`) and a
   banned-list prevents collisions with `admin`, `api`, `item`, `contact`,
   `sitemap.xml`, `invite`, etc. Because a validated slug never contains `_`, the
@@ -264,6 +264,11 @@ visitors touch it, so it scales with the number of admins editing at once
   the key is absent, so AI is switchable per environment, not a hard dependency.
 - **Cost/quotas, not capacity, are the knob.** Throughput is bounded by your
   Gemini quota and the per-user `AI_RATELIMIT_PER_MIN`, not by a box you own.
+- **Resilient by default.** Transient failures (`429`/`5xx`/transport) are
+  retried with exponential backoff (`GEMINI_MAX_RETRIES` / `GEMINI_RETRY_BACKOFF`),
+  and a `404` on the primary model falls back once to `GEMINI_FALLBACK_MODEL`, so
+  a renamed preview model or a brief blip doesn't surface as an editor error. The
+  configured model is logged once at boot.
 
 It holds no state on our side — the only "config" is the key and model name,
 both reproducible from `.env`.
@@ -302,8 +307,11 @@ reproducible from this repo.
 Consequences:
 
 - **Backup = the whole database.** Atlas continuous backup, or `mongodump` of
-  `MDB_DB_NAME`. To restore or export a single store, scope to its
-  `{handle}__{store}_*` collections.
+  `MDB_DB_NAME`, is the platform-wide safety net. For a **single** store, use the
+  built-in JSON export/restore (`GET/POST /manage/stores/{handle}/{store}/export`
+  and `/import`, or `make export-store` / `import-store`) — it dumps and reloads
+  just that store's `{handle}__{store}_*` collections (re-homing `app_id` on
+  import), which is also the pragmatic blast-radius mitigation below.
 - **`MDB_JWT_SECRET` rotation logs out every session** (one pool) **and
   invalidates open namespace invites** (they're signed with the same secret).
 - **`MDB_ENGINE_MASTER_KEY` encrypts secrets at rest** — back it up out-of-band.
@@ -325,6 +333,11 @@ A masterclass tells you where the walls are.
   runaway query, a bad deploy, or a corrupted platform collection can affect
   everyone. Isolation is logical (scope prefixes + `app_id` + the RBAC overlay),
   not physical. If you need hard isolation per store, run separate deployments.
+  The mitigation short of that rearchitecture is the per-store JSON
+  export/restore (above) — a cheap, per-tenant backup/rollback that works
+  against any Mongo — plus optional per-store content caps
+  (`MAX_ITEMS_/SECTIONS_/UPLOADS_PER_STORE`, enforced on CRUD, AI, and uploads)
+  so one tenant can't balloon the shared database.
 - **Collection fan-out.** Each store adds ~6 collections (plus indexes) to the
   one database. Thousands of stores means tens of thousands of collections;
   watch Mongo's per-database limits and index memory. At that scale, sharding or
@@ -372,8 +385,14 @@ A masterclass tells you where the walls are.
       (never sent over plain HTTP). See "Session cookies & CSRF" below.
 - [ ] CDN in front of the storefront; the 60s public cache respected.
 - [ ] Cloudinary configured (uploads return 503 otherwise).
-- [ ] Orchestrator health checks wired to `/__mdb/health/live` (already in the
-      Dockerfile and compose).
+- [ ] Orchestrator **liveness** wired to `/healthz` (already the compose
+      healthcheck) and **readiness** to `/readyz` (pings Mongo → `503` when it's
+      unreachable, so a broken replica is drained instead of blackholing traffic).
+- [ ] `/manage/status` reachable for the superuser (at-a-glance platform metrics),
+      and per-request `X-Request-ID` propagated by your proxy for tracing.
+- [ ] Per-store quotas set if self-serve is open
+      (`MAX_ITEMS_/SECTIONS_/UPLOADS_PER_STORE`), and a per-store backup cadence
+      chosen (`make export-store`) on top of the whole-DB backup.
 - [ ] Replicas behind a load balancer; single uvicorn process per container.
 - [ ] MongoDB is a replica set (Atlas) so `store_registry` change streams
       propagate lifecycle changes (archive/delete/rename) across replicas

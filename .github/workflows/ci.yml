@@ -72,7 +72,8 @@ jobs:
   # Builds and BOOTS the real container image against a live Mongo — the app is
   # only exercised in-process by the `test` job, so this is what catches
   # image-level breakage (e.g. a module the Dockerfile forgot to COPY) that
-  # unit tests can't see. Ollama is intentionally omitted; AI degrades to 503.
+  # unit tests can't see. No GEMINI_API_KEY is provided, so the AI editor
+  # degrades to 503 (readiness still reports ai_configured=false and stays 200).
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -121,14 +122,16 @@ jobs:
           ok=""
           for i in $(seq 1 60); do
             code=$(curl -fsS -o /dev/null -w '%{http_code}' \
-              http://localhost:8000/__mdb/health/live 2>/dev/null || true)
+              http://localhost:8000/healthz 2>/dev/null || true)
             if [ "$code" = "200" ]; then ok=1; echo "healthy (attempt $i)"; break; fi
             echo "waiting for app... ($i)"; sleep 2
           done
           if [ -z "$ok" ]; then echo "app never became healthy"; docker logs app; exit 1; fi
 
+          # /readyz (Mongo ping), the console and a scoped storefront — proves
+          # the module graph, readiness, SSR and per-store scoping in the image.
           fail=0
-          for path in /manage /demo/; do
+          for path in /readyz /manage /demo/; do
             code=$(curl -fsS -o /dev/null -w '%{http_code}' "http://localhost:8000$path" 2>/dev/null || true)
             echo "GET $path -> $code"
             [ "$code" = "200" ] || fail=1
@@ -139,3 +142,48 @@ jobs:
         if: always()
         working-directory: .
         run: docker logs app || true
+
+  # Real-browser end-to-end flows (Playwright) against a booted uvicorn server:
+  # signup and the one-click Quick store. The AI-chat flow auto-skips because no
+  # GEMINI_API_KEY is set here, so this job stays green without the secret.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            ai-stores/requirements.txt
+            ai-stores/requirements-dev.txt
+
+      - name: Start MongoDB Atlas Local
+        working-directory: .
+        run: docker run -d --name atlas-local -p 27017:27017 mongodb/mongodb-atlas-local:latest
+
+      - name: Wait for a writable PRIMARY
+        working-directory: .
+        run: |
+          for i in $(seq 1 60); do
+            if docker exec atlas-local mongosh --quiet --host 127.0.0.1 --port 27017 \
+                 --eval "db.hello().isWritablePrimary" 2>/dev/null | grep -q true; then
+              echo "MongoDB is ready (attempt $i)"; exit 0
+            fi
+            echo "Waiting for MongoDB replica-set election... ($i)"; sleep 2
+          done
+          echo "MongoDB did not become primary in time"; docker logs atlas-local; exit 1
+
+      - name: Install dependencies + Chromium
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Run E2E browser tests
+        env:
+          MONGODB_URI: mongodb://localhost:27017/?directConnection=true
+        run: pytest tests/e2e -ra

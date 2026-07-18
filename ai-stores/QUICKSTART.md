@@ -135,7 +135,7 @@ Everything below is editable from the store's admin, or via the conversational
 
 | Feature | Enable by |
 | --- | --- |
-| **AI editor** (Google Gemini) | set `GEMINI_API_KEY` in `.env` (get one at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)). Optional: `GEMINI_MODEL` (default `gemini-3.5-flash`). Chat routes return 503 until set. |
+| **AI editor** (Google Gemini) | set `GEMINI_API_KEY` in `.env` (get one at [aistudio.google.com/apikey](https://aistudio.google.com/apikey)). Optional: `GEMINI_MODEL` (default `gemini-3.5-flash`), `GEMINI_FALLBACK_MODEL`. Chat routes return 503 until set; transient errors auto-retry and a 404 falls back once. |
 | **Image/video uploads** | set `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` (routes return 503 if unset). |
 | **Lead-notification email** | set `RESEND_API_KEY` + a verified `RESEND_FROM`. Per-store toggle lives in the dashboard. |
 
@@ -198,6 +198,7 @@ Compose injects it; you only set it yourself when running outside Compose.
 | `AI_RATELIMIT_PER_MIN` / `UPLOAD_RATELIMIT_PER_MIN` | 20 / 30 | per-user AI + upload throttle |
 | `INVITE_TTL_SECONDS` | 604800 | team-invite link lifetime (7 days) |
 | `MAX_STORES_PER_HANDLE` | 0 | cap stores per handle (0 = unlimited) |
+| `MAX_ITEMS_PER_STORE` / `MAX_SECTIONS_PER_STORE` / `MAX_UPLOADS_PER_STORE` | 0 | per-store content caps (0 = unlimited); over-cap → `409` |
 | `STORE_CACHE_TTL_SECONDS` | 30 | routing-cache backstop refresh interval |
 | `PROVISION_STUCK_MINUTES` | 10 | reconciler retry window for stuck provisions |
 
@@ -211,6 +212,24 @@ Compose injects it; you only set it yourself when running outside Compose.
 | `RESEND_API_KEY` / `RESEND_FROM` | lead-notification email |
 
 Generate fresh secrets any time with `make secrets`.
+
+---
+
+## Operations & backups
+
+- **Health probes:** `GET /healthz` (liveness) and `GET /readyz` (pings Mongo —
+  `503` if unreachable). Point your orchestrator's readiness check at `/readyz`.
+- **Platform snapshot:** `GET /manage/status` (superuser) returns store counts
+  by status, namespaces, members, quotas, and the AI model in use.
+- **Per-store backup:** `make export-store HANDLE=acme STORE=coffee` writes a
+  JSON dump; `make import-store HANDLE=acme STORE=coffee FILE=… [OVERWRITE=1]`
+  restores it (auto-provisions the target if it doesn't exist).
+- **Request tracing:** every response carries an `X-Request-ID`.
+
+```bash
+curl -s localhost:8000/healthz            # {"status":"ok"}
+curl -s localhost:8000/readyz             # {"status":"ok","mongo":true,...}
+```
 
 ---
 
@@ -238,6 +257,8 @@ make provision-store HANDLE=acme STORE=coffee NAME="Acme Coffee"
 make archive-store  HANDLE=acme STORE=coffee       # suspend (keeps data)
 make restore-store  HANDLE=acme STORE=coffee       # re-enable
 make delete-store   HANDLE=acme STORE=coffee       # irreversible deprovision
+make export-store   HANDLE=acme STORE=coffee       # back up one store to JSON
+make import-store   HANDLE=acme STORE=coffee FILE=acme__coffee-export.json
 make reconcile                                     # finish stuck provisions/deletes
 make down                                          # stop (keeps the mongo volume)
 make clean                                         # stop + drop the mongo volume

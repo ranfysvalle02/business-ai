@@ -28,6 +28,7 @@ trust still lives in the validation + confirm steps below.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -49,11 +50,29 @@ logger = logging.getLogger("ai-stores.ai_editor")
 # gemini-3.1-pro-preview) without code changes.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash").strip()
+# A cheaper/always-available model we retry with once if the primary 404s
+# (e.g. a preview model was renamed or isn't enabled for this key).
+GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-2.5-flash").strip()
 GEMINI_API_BASE = os.getenv(
     "GEMINI_API_BASE", "https://generativelanguage.googleapis.com/v1beta"
 ).rstrip("/")
 GEMINI_TIMEOUT = float(os.getenv("GEMINI_TIMEOUT", "60"))
 GEMINI_TEMPERATURE = float(os.getenv("GEMINI_TEMPERATURE", "0.1"))
+# Retries for transient failures (429 / 5xx / transport). 0 disables retrying.
+GEMINI_MAX_RETRIES = int(os.getenv("GEMINI_MAX_RETRIES", "2"))
+# Base seconds for exponential backoff between retries (delay = base * 2**attempt).
+GEMINI_RETRY_BACKOFF = float(os.getenv("GEMINI_RETRY_BACKOFF", "0.5"))
+
+
+def log_startup_config() -> None:
+    """Emit one clear line at boot describing the AI editor's availability."""
+    if GEMINI_API_KEY:
+        logger.info(
+            "AI editor enabled — model=%s fallback=%s retries=%d",
+            GEMINI_MODEL, GEMINI_FALLBACK_MODEL, GEMINI_MAX_RETRIES,
+        )
+    else:
+        logger.warning("AI editor disabled — set GEMINI_API_KEY to enable the conversational editor")
 
 ITEM_STATUS_ENUM = ["Available", "Limited Availability", "Pending", "Sold"]
 
@@ -387,37 +406,78 @@ def parse_gemini_response(data: dict) -> dict[str, Any]:
     return {"reply": reply or "I couldn't turn that into a change. Could you rephrase?"}
 
 
+async def _post_generate(client: "httpx.AsyncClient", model: str, payload: dict) -> "httpx.Response":
+    url = f"{GEMINI_API_BASE}/models/{model}:generateContent"
+    return await client.post(
+        url,
+        headers={"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
+        json=payload,
+    )
+
+
 async def propose(messages: list[dict], snapshot: dict, manifest: dict) -> dict[str, Any]:
-    """Ask Gemini for structured ops. Returns ``{'reply': str}`` or ``{'ops': [...]}``."""
+    """Ask Gemini for structured ops. Returns ``{'reply': str}`` or ``{'ops': [...]}``.
+
+    Resilient by design: retries transient failures (``429``/``5xx``/transport)
+    with exponential backoff up to ``GEMINI_MAX_RETRIES``, and on a ``404``
+    (model not found) falls back once to ``GEMINI_FALLBACK_MODEL``. When the
+    budget is exhausted it raises the same clean ``AIEditorError`` as before.
+    """
     if not GEMINI_API_KEY:
         raise AIEditorError(
             "The AI editor isn't configured. Set GEMINI_API_KEY to enable it."
         )
 
-    url = f"{GEMINI_API_BASE}/models/{GEMINI_MODEL}:generateContent"
     payload = build_payload(messages, snapshot, manifest)
-    try:
-        async with httpx.AsyncClient(timeout=GEMINI_TIMEOUT) as client:
-            resp = await client.post(
-                url,
-                headers={"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
-                json=payload,
-            )
-    except httpx.HTTPError as exc:
-        raise AIEditorError("Couldn't reach the Gemini API. Check your network connection.") from exc
+    model = GEMINI_MODEL
+    tried_fallback = False
+    attempt = 0
 
-    if resp.status_code in (401, 403):
-        raise AIEditorError("Gemini rejected the API key. Check GEMINI_API_KEY.")
-    if resp.status_code == 404:
-        raise AIEditorError(
-            f"Gemini model '{GEMINI_MODEL}' was not found. Set GEMINI_MODEL to an available model."
-        )
-    if resp.status_code == 429:
-        raise AIEditorError("Gemini is rate-limiting requests. Wait a moment and try again.")
-    if resp.status_code >= 400:
-        raise AIEditorError(f"Gemini error: {_gemini_error_message(resp) or resp.status_code}")
+    async with httpx.AsyncClient(timeout=GEMINI_TIMEOUT) as client:
+        while True:
+            try:
+                resp = await _post_generate(client, model, payload)
+            except httpx.HTTPError as exc:
+                if attempt < GEMINI_MAX_RETRIES:
+                    await asyncio.sleep(GEMINI_RETRY_BACKOFF * (2 ** attempt))
+                    attempt += 1
+                    continue
+                raise AIEditorError(
+                    "Couldn't reach the Gemini API. Check your network connection."
+                ) from exc
 
-    return parse_gemini_response(resp.json())
+            if resp.status_code in (401, 403):
+                raise AIEditorError("Gemini rejected the API key. Check GEMINI_API_KEY.")
+
+            if resp.status_code == 404:
+                if not tried_fallback and GEMINI_FALLBACK_MODEL and GEMINI_FALLBACK_MODEL != model:
+                    logger.warning(
+                        "Gemini model '%s' not found; retrying once with fallback '%s'",
+                        model, GEMINI_FALLBACK_MODEL,
+                    )
+                    model, tried_fallback, attempt = GEMINI_FALLBACK_MODEL, True, 0
+                    continue
+                raise AIEditorError(
+                    f"Gemini model '{model}' was not found. Set GEMINI_MODEL to an available model."
+                )
+
+            if resp.status_code == 429 or resp.status_code >= 500:
+                if attempt < GEMINI_MAX_RETRIES:
+                    logger.warning(
+                        "Gemini transient %s (attempt %d/%d); backing off",
+                        resp.status_code, attempt + 1, GEMINI_MAX_RETRIES,
+                    )
+                    await asyncio.sleep(GEMINI_RETRY_BACKOFF * (2 ** attempt))
+                    attempt += 1
+                    continue
+                if resp.status_code == 429:
+                    raise AIEditorError("Gemini is rate-limiting requests. Wait a moment and try again.")
+                raise AIEditorError(f"Gemini error: {_gemini_error_message(resp) or resp.status_code}")
+
+            if resp.status_code >= 400:
+                raise AIEditorError(f"Gemini error: {_gemini_error_message(resp) or resp.status_code}")
+
+            return parse_gemini_response(resp.json())
 
 
 # ── Validation + normalization ────────────────────────────────────────────

@@ -22,6 +22,9 @@ multi-tenant, plus [`rbac.py`](rbac.py) for per-namespace roles.
 - **Isolated data.** The engine prefixes each store's collections
   (`acme__coffee_items`) and tags docs with an `app_id`, so stores can't see
   each other — across handles *or* within one.
+- **Operable.** Liveness/readiness probes (`/healthz`, `/readyz`), a superuser
+  metrics snapshot (`/manage/status`), per-request IDs, optional per-store
+  quotas, and per-store JSON export/restore for backups.
 
 ---
 
@@ -191,9 +194,14 @@ lifecycle from `/manage` or the API (all admin-only, and mirrored by
 | Restore | `POST /manage/stores/{handle}/{store}/restore` | Re-enables an archived or failed store. |
 | Delete | `DELETE /manage/stores/{handle}/{store}` `{confirm: "<store>"}` | **Irreversible** deprovision: drops every `{handle}__{store}_*` collection and removes the registry row; if it was the handle's last store, the handle's `namespace_members` are cleaned up too. Requires the confirm token to equal the store slug. |
 | Reconcile | `POST /manage/reconcile` `{drop_orphans?: bool}` | Finishes stuck `provisioning` rows, completes deletes stranded in `deleting`, and reports (optionally drops) orphaned `{handle}__{store}_*` collections that have no registry row. Superuser only. |
+| Export | `GET /manage/stores/{handle}/{store}/export` | Dumps every `{handle}__{store}_*` collection as MongoDB Extended JSON (`bson.json_util`, so ObjectIds/dates round-trip). The portable backup for one store. |
+| Import | `POST /manage/stores/{handle}/{store}/import` `?overwrite=1` | Restores an export dump. Auto-provisions the target if missing (its scope's `app_id` is re-homed on the way in); refuses a non-empty existing target unless `?overwrite=1`. |
 
-Rename, archive, restore, and delete are gated to the **namespace owner** (or
-the superuser); reconcile is **superuser-only**. Every lifecycle and team action
+Rename, archive, restore, delete, export, and import are gated to the
+**namespace owner** (or the superuser); reconcile is **superuser-only**.
+Export/import (mirrored by `make export-store` / `import-store`) is the
+low-risk, blast-radius mitigation for the shared-DB model — a per-store backup
+and restore without a per-tenant-database rearchitecture. Every lifecycle and team action
 is recorded to the platform `audit_log` (event, handle, store, actor,
 timestamp) — the trail for a deleted store survives, since it lives in the
 platform scope, not the dropped `{handle}__{store}_*` collections. The same
@@ -223,10 +231,12 @@ Everything is environment-driven; see [`.env.example`](.env.example). Key vars:
 | `MDB_JWT_SECRET` | Signs session JWTs **and** namespace invite tokens (rotating it logs users out + invalidates open invites) |
 | `INVITE_TTL_SECONDS` | Lifetime of a team invite token (default 7 days) |
 | `MAX_STORES_PER_HANDLE` | Optional per-handle store cap to blunt signup abuse (`0` = off) |
+| `MAX_ITEMS_PER_STORE` / `MAX_SECTIONS_PER_STORE` / `MAX_UPLOADS_PER_STORE` | Optional per-store content caps (`0` = unlimited). Enforced on CRUD writes, AI-driven creates, and uploads; over-cap returns `409`. Console shows usage badges |
 | `G_NOME_ENV` | Set to `production` behind TLS so the session cookie is `Secure` (see [`SCALE.md`](SCALE.md#session-cookies--csrf)) |
 | `CLOUDINARY_*` | Image/video uploads (routes return 503 if unset) |
 | `GEMINI_API_KEY` | Enables the AI editor (Gemini); unset → chat routes return 503 |
 | `GEMINI_MODEL` / `GEMINI_TEMPERATURE` | AI editor model (default `gemini-3.5-flash`) and sampling temperature |
+| `GEMINI_FALLBACK_MODEL` / `GEMINI_MAX_RETRIES` / `GEMINI_RETRY_BACKOFF` | Resilience: fall back once on a `404`, and retry `429`/`5xx`/transport errors with exponential backoff (defaults `gemini-2.5-flash` / `2` / `0.5s`) |
 | `RESEND_API_KEY` / `RESEND_FROM` | Lead-notification email (unset → notifications off) |
 | `NOTIFY_ENABLED` | Global lead-notification kill switch (default `true`) |
 | `INQUIRY_RATELIMIT_PER_MIN` / `_PER_HOUR` | Public inquiry throttle, per IP+store (default 5 / 30) |
@@ -237,6 +247,23 @@ Everything is environment-driven; see [`.env.example`](.env.example). Key vars:
 
 Generate secrets with `make secrets`. See [`SCALE.md`](SCALE.md) for the
 production checklist, scaling model, and honest limits.
+
+### Observability
+
+Every request is stamped with an `X-Request-ID` (honoured from an upstream proxy
+if present, echoed on the response) and gets one structured access-log line, so
+a client error can be correlated to a server log. Three probes back the ops
+story:
+
+| Endpoint | Auth | Purpose |
+| --- | --- | --- |
+| `GET /healthz` | public | Liveness — process is up, touches nothing. Always `200`. |
+| `GET /readyz` | public | Readiness — pings Mongo and reports `{mongo, stores, ai_configured}`. `200` healthy / `503` if Mongo is unreachable, so a load balancer drains the replica. |
+| `GET /manage/status` | superuser | Platform metrics snapshot: store counts by status, namespaces, members, configured quotas, and the AI model in use. |
+
+The container healthcheck uses `/healthz`; point your orchestrator's readiness
+probe at `/readyz`. The AI editor also logs a clear one-line summary at boot
+(model + fallback when configured, or a warning when disabled).
 
 ---
 
@@ -287,9 +314,19 @@ make test                    # runs pytest against ai_stores_test_* (dropped aft
 
 Tests use a throwaway database and leave `MDB_ENGINE_MASTER_KEY` unset (secrets
 manager off). On every push/PR, CI runs this suite **plus** a `smoke` job that
-builds the Docker image and boots it against Atlas Local — catching image-level
-breakage (e.g. a module missing from the build) that in-process tests can't see.
+builds the Docker image and boots it against Atlas Local, **plus** an `e2e` job
+that drives real-browser flows (signup + Quick store) with Playwright — catching
+image-level and front-end breakage in-process tests can't see.
 See [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
+
+A separate, opt-in browser suite lives in `tests/e2e` (excluded from the fast
+run). To run it locally:
+
+```bash
+pip install -r requirements-dev.txt
+python -m playwright install chromium
+pytest tests/e2e        # signup + Quick store; the AI-chat flow runs only if GEMINI_API_KEY is set
+```
 
 ---
 
@@ -303,6 +340,8 @@ make provision-store  Create a store: HANDLE=acme STORE=coffee NAME="Acme Coffee
 make archive-store    Suspend a store (keeps data): HANDLE=acme STORE=coffee
 make restore-store    Re-enable an archived/failed store: HANDLE=acme STORE=coffee
 make delete-store     Permanently deprovision a store: HANDLE=acme STORE=coffee
+make export-store     Back up a store to JSON: HANDLE=acme STORE=coffee [FILE=out.json]
+make import-store     Restore a store: HANDLE=acme STORE=coffee FILE=out.json [OVERWRITE=1]
 make reconcile        Finish stuck provisions/deletes, report orphans (DROP_ORPHANS=1 to drop)
 make secrets          Print freshly generated secrets
 make test-deps        Install test deps (pytest, pytest-asyncio, asgi-lifespan)

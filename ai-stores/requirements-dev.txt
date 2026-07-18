@@ -6,3 +6,7 @@
 pytest==7.4.4
 pytest-asyncio==0.21.2
 asgi-lifespan==2.1.0
+
+# End-to-end browser tests (own dir/marker; excluded from the fast suite).
+# After install run `python -m playwright install chromium` once.
+pytest-playwright==0.5.2
